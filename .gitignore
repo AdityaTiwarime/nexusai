@@ -24,3 +24,6 @@ dist/
 
 # Local document storage (NEXUS_STORAGE_DIR)
 backend/data/
+
+# Redis snapshots from local runs
+*.rdb

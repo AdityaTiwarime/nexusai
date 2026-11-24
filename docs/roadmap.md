@@ -102,9 +102,10 @@ All business tables carry `organization_id` (tenant key) and are queried through
 | document_chunks | id, document_id, version_id, organization_id, chunk_index, content, pages, tsv (tsvector), embedding (vector) | Phase 3 ✅ |
 | ingestion_jobs | id, document_id, version_id, status, attempts, run_after, locked_at | Phase 3 ✅ |
 | conversations / messages | id, organization_id, user_id; message role, content, status, citations JSONB, model, tokens, latency | Phase 4 ✅ |
-| agent_definitions / tool_definitions | name, description, allowed_roles, is_mutating | Phase 5 |
-| agent_executions / workflow_runs | id, state, plan JSONB, steps JSONB, started/finished timestamps | Phase 5 |
-| approval_requests | id, workflow_run_id, action JSONB, status, requested_by, decided_by, expires_at | Phase 5 |
+| (agent / tool definitions) | tools are a code registry with schemas, not a table: see `docs/agents-design.md` | Phase 5 ✅ |
+| agent_runs | id, organization_id, requested_by, request, status, planner, steps JSONB, summary | Phase 5 ✅ |
+| approval_requests | id, agent_run_id (unique), actions JSONB snapshot, status, requested_by, decided_by, comment, expires_at | Phase 5 ✅ |
+| tickets / outbox_messages | records created by approved actions, unique per (run, step) | Phase 5 ✅ |
 | integrations / integration_credentials | connector type, config JSONB; credentials encrypted at rest | Phase 6 |
 | system_events | id, event_type, idempotency_key (unique), payload JSONB, status | Phase 7 |
 | incidents | id, organization_id, title, timeline JSONB, evidence JSONB, hypotheses JSONB | Phase 9 |
@@ -190,12 +191,17 @@ On your machine:
 | Documents UI (upload, status, versions, chunks, reprocess, delete) | ✅ Implemented (Phase 3) |
 | OCR for scanned PDFs, malware scanning | ⏳ Not planned yet / Phase 10 |
 | Hybrid search (pgvector + full-text, RRF fusion, permission filtering in SQL, heuristic reranking) | ✅ Implemented (Phase 4) |
+| Agent workflows as LangGraph graphs (plan → read-only steps → approval gate → execute → verify) | ✅ Implemented (Phase 5) |
+| Safe tool registry (search documents, create ticket, email customer) with strict schemas | ✅ Implemented (Phase 5). Emails are recorded, not sent, until Phase 6 |
+| Human approval: exact-action snapshot, separation of duties, expiry, race-safe decisions, audit | ✅ Implemented (Phase 5) |
+| Idempotent execution, savepoints, verification and retry | ✅ Implemented (Phase 5) |
+| Planners: offline rules (default) and LLM JSON planner with validation | ✅ Implemented (Phase 5). LLM planner tested against a mocked API only |
 | AI Chat with citations, "no evidence" answers, private conversations, follow-ups | ✅ Implemented (Phase 4) |
 | Answer providers: offline extractive (default) and OpenAI-compatible LLM | ✅ Implemented (Phase 4). LLM tested against a mocked API only; answer quality with a real model not yet measured |
 | RAG benchmark (retrieval hit@k, cited-answer accuracy, refusals) | ✅ Implemented (Phase 4); results in `docs/ai-design.md` |
 | Streaming answers, cross-encoder reranking, query rewriting for follow-ups | ⏳ Possible improvements |
 | Email verification, password reset, SSO/MFA | ⏳ Planned (Phase 6) |
-| Everything else | ⏳ Planned (Phases 5–10) |
+| Everything else | ⏳ Planned (Phases 6–10) |
 
 ## 9. Feature verification matrix
 
@@ -207,7 +213,7 @@ Filled in only from real test runs and evidence. See `docs/testing.md`.
 | Migrations apply cleanly | Yes | Yes | `backend/tests/test_migrations.py` |
 | Frontend status page | Yes | Yes | `frontend/src/test/` |
 | RAG pipeline (retrieval, citations, no-evidence, permissions) | Yes | Yes | `backend/tests/test_rag.py`, `test_answering.py`, `test_rag_eval.py`, `frontend/src/test/chat.test.tsx` |
-| Agent orchestration | No | No | — |
+| Agent orchestration with approvals | Yes | Yes | `backend/tests/test_agents.py`, `frontend/src/test/agents.test.tsx`, `scripts/smoke_test.py` |
 | Authentication (JWT + refresh rotation) | Yes | Yes | `backend/tests/test_auth.py`, `frontend/src/test/auth.test.tsx` |
 | RBAC / tenant isolation | Yes | Yes | `backend/tests/test_rbac_and_tenancy.py` |
 | Audit logging | Yes | Yes | `backend/tests/test_rbac_and_tenancy.py`, `test_auth.py` |

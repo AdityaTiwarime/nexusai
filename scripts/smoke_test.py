@@ -3,6 +3,8 @@
 Registers a new organization, uploads a document through the frontend's nginx
 proxy, waits for the worker to process it, checks that chunks were created, and
 asks a question that must be answered with a citation, plus one that must not.
+Finally an agent run creates a ticket and an email only after a second user
+(a manager) approves it.
 Standard library only, so it runs on any machine with Python 3.
 
     python scripts/smoke_test.py [base_url]     # default http://localhost:5173
@@ -83,6 +85,25 @@ def main() -> None:
     status, reply = call("POST", "/chat/ask", token, {"question": "Who is the CEO of the company?"})
     assert status == 200 and reply["answer"]["status"] == "no_evidence", reply
     print("ok: unanswerable question was refused instead of guessed")
+
+    status, run = call("POST", "/agents/runs", token, {
+        "request": "Customer jane@example.com can't log in. Open a high priority ticket and email her."
+    })  # fmt: skip
+    assert status == 201 and run["status"] == "awaiting_approval", (status, run)
+    status, _ = call("POST", f"/approvals/{run['approval']['id']}/approve", token, {})
+    assert status == 403, "the requester must not be able to approve their own run"
+
+    manager_email = f"manager-{suffix}@example.com"
+    status, _ = call("POST", "/users", token, {
+        "email": manager_email, "full_name": "Smoke Manager",
+        "password": "Smoke-Manager-Password-1", "role": "manager",
+    })  # fmt: skip
+    assert status == 201, status
+    status, login = call("POST", "/auth/login", body={"email": manager_email, "password": "Smoke-Manager-Password-1"})
+    assert status == 200, login
+    status, done = call("POST", f"/approvals/{run['approval']['id']}/approve", login["access_token"], {})
+    assert status == 200 and done["status"] == "completed", done
+    print(f"ok: agent run approved by a manager: {done['summary']}")
 
 
 if __name__ == "__main__":

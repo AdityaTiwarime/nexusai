@@ -345,6 +345,58 @@ export interface AskResponse {
   answer: ChatMessage;
 }
 
+export type RunStatus = "awaiting_approval" | "executing" | "completed" | "rejected" | "expired" | "failed";
+export type StepStatus = "planned" | "done" | "failed" | "awaiting_approval" | "rejected" | "skipped";
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+
+export interface AgentStep {
+  index: number;
+  tool: string;
+  args: Record<string, unknown>;
+  reason: string;
+  mutating: boolean;
+  status: StepStatus;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export interface AgentRun {
+  id: string;
+  request: string;
+  status: RunStatus;
+  planner: string;
+  steps: AgentStep[];
+  summary: string | null;
+  error: string | null;
+  requested_by: string | null;
+  requested_by_email: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  approval: {
+    id: string;
+    status: ApprovalStatus;
+    expires_at: string;
+    decided_by_email: string | null;
+    decided_at: string | null;
+    comment: string | null;
+  } | null;
+}
+
+export interface Approval {
+  id: string;
+  agent_run_id: string;
+  status: ApprovalStatus;
+  request: string;
+  actions: { index: number; tool: string; args: Record<string, unknown>; reason: string }[];
+  requested_by_email: string | null;
+  expires_at: string;
+  decided_by_email: string | null;
+  decided_at: string | null;
+  comment: string | null;
+  created_at: string;
+}
+
 // --- endpoints ---------------------------------------------------------------------
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -428,6 +480,15 @@ export const api = {
   renameConversation: (id: string, title: string) =>
     request<Conversation>(`/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: "DELETE" }),
+
+  startRun: (text: string) => request<AgentRun>("/agents/runs", json({ request: text })),
+  listRuns: () => request<AgentRun[]>("/agents/runs"),
+  getRun: (id: string) => request<AgentRun>(`/agents/runs/${id}`),
+  retryRun: (id: string) => request<AgentRun>(`/agents/runs/${id}/retry`, { method: "POST" }),
+  listApprovals: (status?: ApprovalStatus) =>
+    request<Approval[]>(`/approvals${status ? `?status=${status}` : ""}`),
+  decide: (id: string, decision: "approve" | "reject", comment?: string) =>
+    request<AgentRun>(`/approvals/${id}/${decision}`, json(comment ? { comment } : {})),
 
   downloadDocument: (id: string, version: DocumentVersion) =>
     download(`/documents/${id}/download?version=${version.version}`, version.original_filename),

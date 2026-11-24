@@ -17,6 +17,7 @@ x-backend-env: &backend-env
   NEXUS_OPENAI_API_KEY: ${NEXUS_OPENAI_API_KEY:-}
   NEXUS_ANSWER_PROVIDER: ${NEXUS_ANSWER_PROVIDER:-extractive}
   NEXUS_CHAT_MODEL: ${NEXUS_CHAT_MODEL:-gpt-4o-mini}
+  NEXUS_AGENT_PLANNER: ${NEXUS_AGENT_PLANNER:-rules}
 
 services:
   db:

@@ -35,6 +35,10 @@ API = "/api/v1"
 PASSWORD = "Correct-Horse-Battery-9"
 TEST_REDIS_URL = os.environ.get("NEXUS_TEST_REDIS_URL", "redis://localhost:6379/15")
 TABLES = [
+    "outbox_messages",
+    "tickets",
+    "approval_requests",
+    "agent_runs",
     "messages",
     "conversations",
     "ingestion_jobs",

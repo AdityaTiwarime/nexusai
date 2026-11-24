@@ -44,17 +44,17 @@ class OpenAIChat:
             transport=transport,
         )
 
-    async def complete(self, messages: list[dict[str, str]]) -> ChatResult:
+    async def complete(self, messages: list[dict[str, str]], json_mode: bool = False) -> ChatResult:
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0,  # factual answers: as repeatable as the provider allows
+            "max_tokens": self.max_output_tokens,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
         try:
-            response = await self._client.post(
-                "/chat/completions",
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0,  # factual answers: as repeatable as the provider allows
-                    "max_tokens": self.max_output_tokens,
-                },
-            )
+            response = await self._client.post("/chat/completions", json=payload)
         except httpx.TimeoutException as exc:
             raise ChatError("The AI provider timed out", retryable=True) from exc
         except httpx.TransportError as exc:

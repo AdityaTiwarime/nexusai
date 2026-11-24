@@ -16,6 +16,8 @@ from app.core.middleware import RequestContextMiddleware
 from app.core.rate_limit import build_rate_limiter
 from app.db.session import Database
 from app.llm.embeddings import build_embedder
+from app.modules.agents.planner import build_planner
+from app.modules.agents.router import router as agents_router
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
 from app.modules.documents.router import router as documents_router
@@ -40,12 +42,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.rate_limiter = build_rate_limiter(settings.redis_url, settings.rate_limit_enabled)
         app.state.embedder = build_embedder(settings)  # embeds search queries
         app.state.answerer = build_answerer(settings)
+        app.state.planner = build_planner(settings)
         logger.info("startup", extra={"environment": settings.environment, "version": __version__})
         try:
             yield
         finally:
             await app.state.rate_limiter.aclose()
-            for client in (app.state.embedder, app.state.answerer):
+            for client in (app.state.embedder, app.state.answerer, app.state.planner):
                 if hasattr(client, "aclose"):
                     await client.aclose()
             await app.state.db.dispose()
@@ -82,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         audit_router,
         documents_router,
         rag_router,
+        agents_router,
     )
     for router in routers:
         app.include_router(router, prefix=settings.api_prefix)

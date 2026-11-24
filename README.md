@@ -4,10 +4,12 @@
 
 **Enterprise Intelligence & Autonomous Workflow Platform.** A portfolio implementation of the kind of system a Forward Deployed Engineer builds: it connects scattered company knowledge, business applications and workflows into one secure, AI-powered platform with cited answers, approval-gated AI agents and full observability.
 
-> **Status: Phases 1–4 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence; RAG engine and AI Chat). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
+> **Status: Phases 1–5 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence; RAG engine and AI Chat; AI agents with human approval). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
 
-| AI Chat with citations | Hybrid search |
+| Approval: exactly what will run | Completed agent run |
 |---|---|
+| ![Approvals](docs/screenshots/approvals.png) | ![Agent run](docs/screenshots/workflow-completed.png) |
+| **AI Chat with citations** | **Hybrid search** |
 | ![AI Chat](docs/screenshots/chat.png) | ![Search](docs/screenshots/search.png) |
 | **Documents** | **Document detail** |
 | ![Documents](docs/screenshots/documents.png) | ![Document detail](docs/screenshots/document-detail.png) |
@@ -27,6 +29,15 @@ A 5,000-person company keeps knowledge in documents, a CRM, a ticketing system a
 All data is synthetic. No real customer data or credentials are used.
 
 ## What works today
+
+**Phase 5: AI agents with human approval**
+
+- **Describe a task in plain language**, for example "Customer jane@globex.com can't log in. Open a high priority ticket and email her." The agent plans the steps as a **LangGraph** workflow.
+- **Read-only steps run at once; anything that creates or sends waits for a human.** A manager sees the exact actions and arguments, then approves or rejects with a comment.
+- **Separation of duties**: nobody can approve their own request. Requests expire after 24 hours, and two simultaneous approvals can't both execute.
+- **Safe by construction**: agents can only use three registered tools with strict schemas: search documents, create ticket, email customer. Any plan with an unknown tool or extra arguments is rejected as a whole.
+- **Reliable execution**: each action runs in a savepoint, is idempotent per step, and is verified afterwards. Failed runs can be retried without duplicating anything. Every step is in the audit log.
+- Emails are **recorded in an outbox, not sent**, until the email connector arrives in Phase 6. Details: [`docs/agents-design.md`](docs/agents-design.md).
 
 **Phase 4: RAG engine and AI Chat**
 
@@ -68,7 +79,7 @@ All data is synthetic. No real customer data or credentials are used.
 - **React + TypeScript dashboard** (Vite, Tailwind, React Router, TanStack Query) showing live system status, with the navigation for all upcoming modules.
 - **Docker Compose** for PostgreSQL (pgvector image), backend and frontend (nginx), with health-checked startup ordering.
 - **GitHub Actions CI**: lint, backend tests against real PostgreSQL, frontend type check/tests/build, dependency audits, and a full Docker stack health check.
-- **Tests** (all phases): 173 backend + 31 frontend, all passing, plus browser end-to-end runs and a CI smoke test that uploads a document and asks questions through the Docker stack. Details in [`docs/testing.md`](docs/testing.md).
+- **Tests** (all phases): 200 backend + 39 frontend, all passing, plus browser end-to-end runs and a CI smoke test that uploads a document, asks questions and runs an approved agent task through the Docker stack. Details in [`docs/testing.md`](docs/testing.md).
 
 ## Architecture
 
@@ -89,10 +100,10 @@ Full diagrams, component responsibilities and design decisions: [`docs/architect
 
 ## Tech stack
 
-| Layer | Now (Phase 4) | Planned |
+| Layer | Now (Phase 5) | Planned |
 |---|---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, React Router, TanStack Query | — |
-| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx; background worker; hybrid RAG with an OpenAI-compatible LLM client | LangGraph |
+| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx, LangGraph; background worker; hybrid RAG with an OpenAI-compatible LLM client | Connector framework |
 | Data | PostgreSQL 16 + pgvector, Redis | Kafka |
 | Infra | Docker, Docker Compose, GitHub Actions | AWS, Terraform (if deployed) |
 | Observability | Structured logs, request IDs | OpenTelemetry, Prometheus, Grafana |
@@ -111,7 +122,7 @@ docker compose up --build
 
 Then open:
 
-- App: http://localhost:5173 (click **Create an organization**, upload files in **Documents**, then ask questions in **AI Chat**)
+- App: http://localhost:5173 (click **Create an organization**, upload files in **Documents**, then ask questions in **AI Chat**). To try approvals, add a manager in **Users**: nobody can approve their own agent request.
 - Optional: set `NEXUS_OPENAI_API_KEY` and `NEXUS_ANSWER_PROVIDER=openai` (and `NEXUS_EMBEDDING_PROVIDER=openai`) in `.env` for LLM answers and semantic search. If you change the embedding provider, reprocess your documents.
 - API docs (Swagger): http://localhost:8000/docs
 - Readiness: http://localhost:8000/api/v1/health/ready
@@ -191,6 +202,13 @@ Interactive docs: http://localhost:8000/docs (disabled in production).
 | GET | `/api/v1/conversations` | owner | Your conversations, most recent first |
 | GET | `/api/v1/conversations/{id}` | owner | Messages, with citations re-checked against current permissions |
 | PATCH / DELETE | `/api/v1/conversations/{id}` | owner | Rename / delete a conversation |
+| GET | `/api/v1/agents/tools` | org member | The tools agents may use, with schemas and approval requirement |
+| POST | `/api/v1/agents/runs` | org member | Start an agent task; read-only steps run, others wait for approval |
+| GET | `/api/v1/agents/runs`, `/agents/runs/{id}` | owner; managers and admins see all | Runs with steps, results and approval state |
+| POST | `/api/v1/agents/runs/{id}/retry` | manager, org admin | Retry a failed approved run (completed steps aren't repeated) |
+| GET | `/api/v1/approvals`, `/approvals/{id}` | manager, org admin | Approval queue (`?status=pending`), with the exact actions |
+| POST | `/api/v1/approvals/{id}/approve`, `/reject` | manager, org admin (not the requester) | Decide, with an optional comment |
+| GET | `/api/v1/tickets`, `/api/v1/outbox` | org member / manager, org admin | Records created by approved actions |
 
 **Creating the platform super admin** (there is deliberately no API for this):
 
@@ -208,6 +226,7 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 - [`docs/architecture.md`](docs/architecture.md): architecture diagrams and decisions
 - [`docs/security.md`](docs/security.md): authentication, RBAC, tenant isolation, threat model, known limitations
 - [`docs/database-design.md`](docs/database-design.md): ER diagram, constraints, indexes, design decisions
+- [`docs/agents-design.md`](docs/agents-design.md): agent workflow, tools, planners, approval rules, reliability
 - [`docs/ai-design.md`](docs/ai-design.md): ingestion, retrieval, answers with citations, prompt-injection handling, evaluation results, limitations
 - [`docs/operations.md`](docs/operations.md): services, worker, queries, troubleshooting
 - [`docs/testing.md`](docs/testing.md): test strategy and actual results

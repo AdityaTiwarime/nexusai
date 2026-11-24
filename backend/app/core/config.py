@@ -94,6 +94,14 @@ class Settings(BaseSettings):
     retrieval_min_similarity: float = Field(default=0.3, ge=0, le=1)
     chat_rate_limit_per_user: int = Field(default=30, ge=1)  # questions per minute
 
+    # --- Agents and approvals ---
+    # "rules" = offline keyword planner (limited, predictable). "openai" = an LLM writes the
+    # plan as JSON; either way the plan is validated against the tool registry.
+    agent_planner: Literal["rules", "openai"] = "rules"
+    agent_max_steps: int = Field(default=5, ge=1, le=10)
+    approval_ttl_hours: int = Field(default=24, ge=1, le=720)
+    agent_rate_limit_per_user: int = Field(default=10, ge=1)  # new runs per minute
+
     # --- Background worker ---
     worker_poll_seconds: float = Field(default=1.0, gt=0, le=60)
     job_max_attempts: int = Field(default=3, ge=1, le=10)
@@ -106,7 +114,11 @@ class Settings(BaseSettings):
     def check_documents_and_embeddings(self) -> "Settings":
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
-        uses_openai = "openai" in (self.embedding_provider, self.answer_provider)
+        uses_openai = "openai" in (
+            self.embedding_provider,
+            self.answer_provider,
+            self.agent_planner,
+        )
         if uses_openai and not self.openai_api_key:
             raise ValueError("NEXUS_OPENAI_API_KEY is required when an OpenAI provider is selected")
         return self

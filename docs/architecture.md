@@ -110,6 +110,30 @@ sequenceDiagram
 
 Details: [`ai-design.md`](ai-design.md) (pipeline) and [`operations.md`](operations.md) (running the worker).
 
+## Agent approval flow (Phase 5)
+
+```mermaid
+sequenceDiagram
+    participant E as Employee
+    participant A as FastAPI
+    participant G as LangGraph (plan / execute)
+    participant D as PostgreSQL
+    participant M as Manager
+
+    E->>A: POST /agents/runs {request}
+    A->>G: plan graph: plan, validate, run read-only steps
+    G-->>A: steps (create/send steps awaiting approval)
+    A->>D: agent_run + approval_request (exact actions) + audit
+    M->>A: POST /approvals/{id}/approve
+    A->>D: UPDATE ... WHERE status='pending' (one winner), commit
+    A->>G: execute graph: each action in a savepoint, then verify
+    G->>D: ticket + outbox message (unique per run and step)
+    A->>D: run completed + audit
+    A-->>M: result with ticket number
+```
+
+Details: [`agents-design.md`](agents-design.md).
+
 ## Question answering flow (Phase 4)
 
 ```mermaid

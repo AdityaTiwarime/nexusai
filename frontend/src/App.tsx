@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import { RequireAuth } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
+import { ApprovalsPage } from "./pages/ApprovalsPage";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
 import { ChatPage } from "./pages/ChatPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -13,6 +14,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { SearchPage } from "./pages/SearchPage";
 import { UsersPage } from "./pages/UsersPage";
+import { WorkflowsPage } from "./pages/WorkflowsPage";
 
 export function App() {
   return (
@@ -29,9 +31,12 @@ export function App() {
               <Route path="chat" element={<ChatPage />} />
               <Route path="chat/:id" element={<ChatPage />} />
               <Route path="search" element={<SearchPage />} />
+              <Route path="workflows" element={<WorkflowsPage />} />
+              <Route path="workflows/:id" element={<WorkflowsPage />} />
             </Route>
             <Route element={<RequireAuth roles={["org_admin", "manager"]} />}>
               <Route path="users" element={<UsersPage />} />
+              <Route path="approvals" element={<ApprovalsPage />} />
             </Route>
             <Route element={<RequireAuth roles={["org_admin"]} />}>
               <Route path="audit-logs" element={<AuditLogsPage />} />

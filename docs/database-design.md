@@ -2,7 +2,7 @@
 
 PostgreSQL 16 is the system of record. Schema changes are made only through Alembic migrations in `backend/alembic/versions/`, and a test (`alembic check`) fails if the ORM models drift from the migrations.
 
-## Current schema (Phases 2–4)
+## Current schema (Phases 2–5)
 
 ```mermaid
 erDiagram
@@ -17,6 +17,10 @@ erDiagram
     documents ||--o{ ingestion_jobs : "processed by"
     users ||--o{ conversations : "owns"
     conversations ||--o{ messages : "contains"
+    users ||--o{ agent_runs : "requests"
+    agent_runs ||--o| approval_requests : "waits for"
+    agent_runs ||--o{ tickets : "creates"
+    agent_runs ||--o{ outbox_messages : "records"
 
     organizations {
         uuid id PK
@@ -128,6 +132,46 @@ erDiagram
         int output_tokens
         int latency_ms
     }
+    agent_runs {
+        uuid id PK
+        uuid organization_id FK
+        uuid requested_by FK
+        text request
+        varchar status "CHECK: 6 states"
+        varchar planner
+        jsonb steps "tool, args, status, result"
+        text summary
+    }
+    approval_requests {
+        uuid id PK
+        uuid agent_run_id FK "UNIQUE"
+        varchar status "pending/approved/rejected/expired"
+        jsonb actions "exact snapshot"
+        uuid requested_by FK
+        uuid decided_by FK
+        varchar comment
+        timestamptz expires_at
+    }
+    tickets {
+        uuid id PK
+        uuid organization_id FK
+        int number "UNIQUE per org"
+        varchar title
+        varchar priority "CHECK"
+        varchar customer_email
+        uuid agent_run_id FK
+        int step_index "UNIQUE with run"
+    }
+    outbox_messages {
+        uuid id PK
+        uuid organization_id FK
+        varchar recipient
+        varchar subject
+        text body
+        varchar status "recorded (never sent yet)"
+        uuid agent_run_id FK
+        int step_index "UNIQUE with run"
+    }
 ```
 
 ## Constraints
@@ -144,6 +188,9 @@ erDiagram
 | document_versions | `UNIQUE (organization_id, sha256)` | Duplicate uploads are detected even when two arrive at the same moment. |
 | documents | `CHECK` on `status`, `file_type`, `min_role` | Only known values can be stored. |
 | documents → versions, chunks, jobs | `ON DELETE CASCADE` | Deleting a document removes everything derived from it in one statement. |
+| approval_requests | `UNIQUE (agent_run_id)` | One approval per run. |
+| tickets, outbox_messages | `UNIQUE (agent_run_id, step_index)` | An approved action can never create its record twice, even when retried. |
+| tickets | `UNIQUE (organization_id, number)` | Human-friendly ticket numbers that can't collide. |
 | document_chunks.tsv | `GENERATED ALWAYS AS (to_tsvector('english', content)) STORED` | Keyword index can never drift from the text. |
 
 ## Indexes
@@ -160,6 +207,8 @@ erDiagram
 | `ingestion_jobs (status, run_after)` | The worker's "next runnable job" query. |
 | `conversations (user_id, updated_at)` | A user's chat list, most recent first. |
 | `messages (conversation_id, created_at)` | Loading one conversation in order. |
+| `agent_runs (organization_id, created_at)`, `agent_runs (requested_by)` | Run lists for managers, and for each employee. |
+| `approval_requests (organization_id, status)` | The pending-approvals queue. |
 
 **Tenant-first composite indexes** are the rule for every tenant-owned table: almost every query starts with `WHERE organization_id = :caller_org`.
 
@@ -178,7 +227,6 @@ erDiagram
 
 | Phase | Tables |
 |---|---|
-| 5 | `agent_definitions`, `tool_definitions`, `agent_executions`, `workflow_runs`, `approval_requests` |
 | 6 | `integrations`, `integration_credentials` (encrypted at rest) |
 | 7 | `system_events` (unique idempotency key) |
 | 9 | `incidents` |
