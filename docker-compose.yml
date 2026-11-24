@@ -26,6 +26,9 @@ services:
       NEXUS_LOG_LEVEL: ${NEXUS_LOG_LEVEL:-INFO}
       NEXUS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nexus}:${POSTGRES_PASSWORD:-nexus}@db:5432/${POSTGRES_DB:-nexusai}
       NEXUS_CORS_ORIGINS: ${NEXUS_CORS_ORIGINS:-http://localhost:5173}
+      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
+      NEXUS_COOKIE_SECURE: ${NEXUS_COOKIE_SECURE:-false}
+      NEXUS_ALLOW_PUBLIC_SIGNUP: ${NEXUS_ALLOW_PUBLIC_SIGNUP:-true}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:

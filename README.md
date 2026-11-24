@@ -1,10 +1,14 @@
 # NexusAI
 
+[![CI](https://github.com/AdityaTiwarime/nexusai/actions/workflows/ci.yml/badge.svg)](https://github.com/AdityaTiwarime/nexusai/actions/workflows/ci.yml)
+
 **Enterprise Intelligence & Autonomous Workflow Platform.** A portfolio implementation of the kind of system a Forward Deployed Engineer builds: it connects scattered company knowledge, business applications and workflows into one secure, AI-powered platform with cited answers, approval-gated AI agents and full observability.
 
-> **Status: Phase 1 of 10 (Foundation) complete.** This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
+> **Status: Phases 1–2 of 10 complete** (foundation; authentication, roles and multi-tenancy). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
 
-![Dashboard](docs/screenshots-dashboard.png)
+| User management | Audit log |
+|---|---|
+| ![Users](docs/screenshots/users.png) | ![Audit logs](docs/screenshots/audit-logs.png) |
 
 ## The business problem
 
@@ -18,7 +22,19 @@ A 5,000-person company keeps knowledge in documents, a CRM, a ticketing system a
 
 All data is synthetic. No real customer data or credentials are used.
 
-## What works today (Phase 1)
+## What works today
+
+**Phase 2: secure multi-tenant access**
+
+- **Organizations as tenants.** Sign up creates an organization with you as its admin; every query is scoped to the caller's organization, and another organization's records return **404** even if you know their IDs.
+- **Authentication**: Argon2id password hashing, 15-minute JWT access tokens, and **rotating refresh tokens in an httpOnly cookie** with **reuse detection** (replaying an old token ends the whole session).
+- **Role-based access control** enforced on the server: org admin, manager, employee, plus a platform super admin created only via CLI. Role changes and deactivations take effect **immediately**.
+- **User management** UI and API: add users, change roles, deactivate (which also ends their sessions).
+- **Audit log**: logins, failed logins, token-reuse alerts and user changes, each with actor, IP and request ID; viewable and filterable by org admins.
+- Details: [`docs/security.md`](docs/security.md) and [`docs/database-design.md`](docs/database-design.md).
+
+**Phase 1: foundation**
+
 
 - **FastAPI backend**: app factory, validated environment configuration, JSON structured logging, request IDs on every response and log line, safe 500 handling that never leaks internals.
 - **PostgreSQL** via async SQLAlchemy 2.0 + asyncpg, with **Alembic** migrations.
@@ -26,7 +42,7 @@ All data is synthetic. No real customer data or credentials are used.
 - **React + TypeScript dashboard** (Vite, Tailwind, React Router, TanStack Query) showing live system status, with the navigation for all upcoming modules.
 - **Docker Compose** for PostgreSQL (pgvector image), backend and frontend (nginx), with health-checked startup ordering.
 - **GitHub Actions CI**: lint, backend tests against real PostgreSQL, frontend type check/tests/build, dependency audits, and a full Docker stack health check.
-- **Tests**: 20 backend + 4 frontend, all passing. Details in [`docs/testing.md`](docs/testing.md).
+- **Tests**: 59 backend + 14 frontend, all passing, plus a browser end-to-end run. Details in [`docs/testing.md`](docs/testing.md).
 
 ## Architecture
 
@@ -44,7 +60,7 @@ Full diagrams, component responsibilities and design decisions: [`docs/architect
 | Layer | Now (Phase 1) | Planned |
 |---|---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, React Router, TanStack Query | — |
-| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic | LangGraph, LangChain, background workers |
+| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2 | LangGraph, LangChain, background workers |
 | Data | PostgreSQL 16 | pgvector, Redis, Kafka |
 | Infra | Docker, Docker Compose, GitHub Actions | AWS, Terraform (if deployed) |
 | Observability | Structured logs, request IDs | OpenTelemetry, Prometheus, Grafana |
@@ -63,7 +79,7 @@ docker compose up --build
 
 Then open:
 
-- Dashboard: http://localhost:5173
+- App: http://localhost:5173 (click **Create an organization** to get started)
 - API docs (Swagger): http://localhost:8000/docs
 - Readiness: http://localhost:8000/api/v1/health/ready
 
@@ -103,13 +119,33 @@ cd frontend
 npm test
 ```
 
-## API overview (Phase 1)
+## API overview
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/v1/health/live` | Process is running (never checks dependencies) |
-| GET | `/api/v1/health/ready` | Dependencies OK; 503 with per-check details if not |
-| GET | `/api/v1/system/info` | App name, version, environment |
+Interactive docs: http://localhost:8000/docs (disabled in production).
+
+| Method | Path | Who | Description |
+|---|---|---|---|
+| GET | `/api/v1/health/live` | public | Process is running |
+| GET | `/api/v1/health/ready` | public | Dependencies OK; 503 with per-check details if not |
+| GET | `/api/v1/system/info` | public | App name, version, environment |
+| POST | `/api/v1/auth/register` | public | Create an organization + its first admin, sign in |
+| POST | `/api/v1/auth/login` | public | Sign in (access token + refresh cookie) |
+| POST | `/api/v1/auth/refresh` | refresh cookie | Rotate the refresh token, get a new access token |
+| POST | `/api/v1/auth/logout` | refresh cookie | End the session |
+| GET | `/api/v1/auth/me` | signed in | Current user and organization |
+| GET | `/api/v1/organizations/current` | org member | Caller's organization |
+| GET | `/api/v1/users` | manager, org admin | Users in the caller's organization |
+| GET | `/api/v1/users/{id}` | manager, org admin | One user (404 if in another organization) |
+| POST | `/api/v1/users` | org admin | Add a user |
+| PATCH | `/api/v1/users/{id}` | org admin | Change name, role or active status |
+| GET | `/api/v1/audit-logs` | org admin | Organization's audit events (paginated, filterable) |
+| GET | `/api/v1/admin/organizations` | super admin | All organizations |
+
+**Creating the platform super admin** (there is deliberately no API for this):
+
+```bash
+docker compose exec backend python -m app.cli create-superadmin --email ops@example.com --name "Platform Ops"
+```
 
 ## Configuration
 
@@ -119,6 +155,8 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 
 - [`docs/roadmap.md`](docs/roadmap.md): feasibility, phases, database design, milestones, feature status
 - [`docs/architecture.md`](docs/architecture.md): architecture diagrams and decisions
+- [`docs/security.md`](docs/security.md): authentication, RBAC, tenant isolation, threat model, known limitations
+- [`docs/database-design.md`](docs/database-design.md): ER diagram, constraints, indexes, design decisions
 - [`docs/testing.md`](docs/testing.md): test strategy and actual results
 
 ## Project structure
@@ -128,7 +166,7 @@ nexusai/
 ├── backend/            FastAPI app, Alembic migrations, tests
 ├── frontend/           React + TypeScript app, nginx config
 ├── infra/              Postgres init scripts (observability config in later phases)
-├── docs/               Architecture, roadmap, testing
+├── docs/               Architecture, roadmap, security, database design, testing
 ├── .github/workflows/  CI pipeline
 └── docker-compose.yml
 ```

@@ -88,15 +88,15 @@ nexusai/
 
 ## 4. Database design proposal
 
-All business tables carry `organization_id` (tenant key) and are queried through a tenant-scoped repository layer. Full ER diagram lands in `docs/database-design.md` in Phase 2.
+All business tables carry `organization_id` (tenant key) and are queried through a tenant-scoped repository layer. Full ER diagram and design decisions: [`database-design.md`](database-design.md).
 
 | Table | Key columns | Introduced |
 |---|---|---|
-| organizations | id, name, slug (unique), created_at | Phase 2 |
-| users | id, organization_id FK, email (unique per org), password_hash, is_active | Phase 2 |
-| roles / user_roles | role name (super_admin, org_admin, manager, employee) | Phase 2 |
-| refresh_tokens | id, user_id, token_hash, expires_at, revoked_at | Phase 2 |
-| audit_logs | id, organization_id, actor_id, action, target_type, target_id, metadata JSONB, created_at | Phase 2 |
+| organizations | id, name, slug (unique), is_active, created_at | Phase 2 ✅ |
+| users | id, organization_id FK, email (unique), password_hash, role, is_active | Phase 2 ✅ |
+| (roles) | stored as a constrained `role` column on users, see `database-design.md` | Phase 2 ✅ |
+| refresh_tokens | id, user_id, family_id, token_hash, expires_at, revoked_at | Phase 2 ✅ |
+| audit_logs | id, organization_id, actor_id, action, target, ip, request_id, details JSONB, created_at | Phase 2 ✅ |
 | documents | id, organization_id, uploaded_by, filename, file_type, sha256 (unique per org), status, current_version | Phase 3 |
 | document_versions | id, document_id, version, storage_path, created_at | Phase 3 |
 | document_chunks | id, document_version_id, organization_id, chunk_index, content, tsv (tsvector), embedding (vector) | Phase 3 |
@@ -173,9 +173,16 @@ On your machine:
 | PostgreSQL connection + Alembic migrations | ✅ Implemented (Phase 1) |
 | Liveness / readiness health checks | ✅ Implemented (Phase 1) |
 | React + TypeScript dashboard shell with live system status | ✅ Implemented (Phase 1) |
-| Docker Compose (db, backend, frontend) | ✅ Implemented (Phase 1); see testing.md for what was verified |
-| GitHub Actions CI | ✅ Implemented (Phase 1) |
-| Auth, RBAC, tenancy | ⏳ Planned (Phase 2) |
+| Docker Compose (db, backend, frontend) | ✅ Implemented (Phase 1), verified in CI |
+| GitHub Actions CI (lint, tests, dependency audit, Docker stack health) | ✅ Implemented (Phase 1) |
+| Registration, login, logout, JWT access tokens, rotating refresh tokens with reuse detection | ✅ Implemented (Phase 2) |
+| Roles (super admin, org admin, manager, employee) enforced server-side | ✅ Implemented (Phase 2) |
+| Multi-tenant isolation (organization-scoped queries, 404 for foreign IDs) | ✅ Implemented (Phase 2) |
+| User management (add, change role, deactivate) | ✅ Implemented (Phase 2) |
+| Audit log (API + UI) | ✅ Implemented (Phase 2) |
+| Super-admin CLI | ✅ Implemented (Phase 2) |
+| Login rate limiting | ⏳ Planned (Phase 3, with Redis) |
+| Email verification, password reset, SSO/MFA | ⏳ Planned (Phase 6) |
 | Everything else | ⏳ Planned (Phases 3–10) |
 
 ## 9. Feature verification matrix
@@ -189,8 +196,10 @@ Filled in only from real test runs and evidence. See `docs/testing.md`.
 | Frontend status page | Yes | Yes | `frontend/src/test/` |
 | RAG pipeline | No | No | — |
 | Agent orchestration | No | No | — |
-| RBAC / tenant isolation | No | No | — |
+| Authentication (JWT + refresh rotation) | Yes | Yes | `backend/tests/test_auth.py`, `frontend/src/test/auth.test.tsx` |
+| RBAC / tenant isolation | Yes | Yes | `backend/tests/test_rbac_and_tenancy.py` |
+| Audit logging | Yes | Yes | `backend/tests/test_rbac_and_tenancy.py`, `test_auth.py` |
 | Enterprise connectors | No | No | — |
 | Observability | No | No | — |
 | Incident investigation | No | No | — |
-| Docker deployment | Yes | Not yet (compose config validated; image build runs in CI) | see `docs/testing.md` |
+| Docker deployment | Yes | Yes (CI builds all images and checks health) | `.github/workflows/ci.yml` (docker job) |

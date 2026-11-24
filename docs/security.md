@@ -1,0 +1,88 @@
+# Security
+
+This document describes how NexusAI authenticates users, authorizes actions and isolates tenants, which threats it addresses, and what is **not** covered yet. Everything listed as a control is implemented and tested; tests are referenced in [`testing.md`](testing.md).
+
+## Authentication
+
+| Aspect | Implementation | Why |
+|---|---|---|
+| Password storage | **Argon2id** (`argon2-cffi`) | Memory-hard; the current OWASP recommendation. Plain passwords are never stored or logged. |
+| Password policy | 12–128 characters; must not contain the user's email name | Length beats complexity rules. The upper bound limits hashing cost from huge inputs. |
+| Login errors | One generic message: *"Invalid email or password"* | Doesn't reveal which emails have accounts. |
+| Timing | Unknown emails are still checked against a dummy hash | "Unknown email" and "wrong password" take the same time. |
+| Access token | JWT (HS256), **15 minutes**, sent as `Authorization: Bearer` | Short-lived, so a leaked token is useful only briefly. |
+| JWT validation | Algorithm pinned to HS256; `exp`, `iat`, `sub`, `iss` required; `type=access` | Blocks `alg: none` tokens, algorithm confusion, expired tokens and tokens from other issuers. |
+| Refresh token | 384-bit random value in an **httpOnly, SameSite=Strict** cookie scoped to `/api/v1/auth`; only its **SHA-256 hash** is stored | JavaScript can't read it, so XSS can't steal it, and a database leak doesn't expose usable tokens. |
+| Rotation | A new refresh token is issued on every refresh; the old one is revoked | A stolen token stops working as soon as the real user refreshes. |
+| Reuse detection | Presenting an already-rotated token revokes the **whole token family** and writes an audit event | Detects token theft and ends the attacker's session as well as the user's. |
+| Logout | Revokes the token family and clears the cookie | The session can't be resumed afterwards. |
+| Access token storage (frontend) | In memory only, never `localStorage` | Not readable from storage by injected scripts. |
+
+## Authorization (RBAC)
+
+Roles are fixed and enforced on the **server** for every request through `require_roles(...)`. Hiding buttons in the UI is a convenience, not a control.
+
+| Capability | Employee | Manager | Org admin | Super admin |
+|---|:-:|:-:|:-:|:-:|
+| View own profile / organization | ✅ | ✅ | ✅ | profile only |
+| List users in own organization | ❌ | ✅ | ✅ | ❌ |
+| Create users, change roles, (de)activate | ❌ | ❌ | ✅ | ❌ |
+| Read audit logs of own organization | ❌ | ❌ | ✅ | ❌ |
+| List all organizations (platform view) | ❌ | ❌ | ❌ | ✅ |
+
+Additional rules:
+
+- **The current role is re-read from the database on every request.** Promotions, demotions and deactivations take effect immediately, not when the token expires.
+- Deactivating a user also **revokes all their refresh tokens**.
+- An admin **cannot change their own role or deactivate themselves** (prevents locking an organization out).
+- The `super_admin` role **cannot be assigned through the API**. It is created only with the CLI (`python -m app.cli create-superadmin`), which reads the password from an environment variable or a prompt so it never lands in shell history.
+
+## Tenant isolation
+
+Every organization is a tenant. The rules:
+
+1. **The tenant comes from the authenticated user, never from the request.** Endpoints filter by the caller's `organization_id` as stored in the database. An `organization_id` sent in a request body is ignored.
+2. **Cross-tenant IDs behave like non-existent IDs (404).** Asking for another organization's user returns *not found*, so the API doesn't even confirm that the ID exists.
+3. **The super admin is not a tenant member.** It belongs to no organization (enforced by a database `CHECK` constraint) and has no access to tenant data endpoints.
+4. **Database constraints back the application rules**: `CHECK` constraints on valid roles and on "super admin ⇔ no organization", foreign keys with `ON DELETE CASCADE` from organizations, and tenant-first composite indexes.
+
+## Audit logging
+
+Security-relevant events are written to `audit_logs` **in the same transaction** as the action they describe, so the log never claims something that didn't happen:
+
+`organization.registered`, `auth.login`, `auth.login_failed` (with a reason that only admins can see), `auth.logout`, `auth.refresh_token_reuse_detected`, `user.created`, `user.updated` (with before/after values).
+
+Each entry stores the actor, IP address and **request ID**, which matches the `X-Request-ID` response header and the server log lines for that request. Audit logs are only readable by org admins, and only for their own organization.
+
+## Configuration safety
+
+Startup **refuses to run in staging or production** if:
+
+- `NEXUS_JWT_SECRET` is the development default or shorter than 32 characters, or
+- `NEXUS_COOKIE_SECURE` is not `true` (the refresh cookie must only travel over HTTPS).
+
+API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses never include stack traces, connection strings or internal messages.
+
+## Threat model (current scope)
+
+| Threat | Mitigation |
+|---|---|
+| Credential stuffing / password guessing | Argon2id hashing, generic errors, failed-login audit trail. **Rate limiting is not yet implemented** (see below). |
+| Stolen access token | 15-minute lifetime; role and active status re-checked on every request. |
+| Stolen refresh token | httpOnly cookie, rotation, reuse detection with family revocation. |
+| Forged or tampered JWT | Signature check with pinned algorithm; `alg: none` and foreign keys rejected (tested). |
+| Cross-tenant data access (IDOR) | Tenant scoping on every query, 404 for foreign IDs, tenant ignored in request bodies (tested). |
+| Privilege escalation | Server-side role checks; `super_admin` not assignable via API; self-demotion blocked (tested). |
+| CSRF | Refresh cookie is `SameSite=Strict` and path-scoped; all other endpoints require a Bearer header, which browsers never attach automatically. |
+| Account enumeration | Identical response and timing for unknown email vs. wrong password; 404 for foreign IDs. |
+| Leaking internals | Generic 500 responses with request ID only; readiness check exposes only the error type. |
+
+## Known limitations (planned)
+
+| Limitation | Plan |
+|---|---|
+| No rate limiting on login/register | Phase 3 adds Redis; login throttling per IP and per account comes with it. |
+| No email verification or password reset | Requires an email provider; planned with the integrations work (Phase 6). |
+| No MFA or SSO (OAuth2/OIDC) | OIDC sign-in is planned alongside the enterprise connectors (Phase 6). |
+| Admin sets the first password for new users | Replace with invite links once email is available. |
+| HS256 shared secret | Sufficient for a single service; move to RS256 with key rotation if other services need to verify tokens. |

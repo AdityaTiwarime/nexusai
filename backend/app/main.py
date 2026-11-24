@@ -7,12 +7,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.db.models  # noqa: F401  (registers all ORM models before first use)
 from app import __version__
 from app.api import health
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.db.session import Database
+from app.modules.audit.router import router as audit_router
+from app.modules.auth.router import router as auth_router
+from app.modules.organizations.router import router as organizations_router
+from app.modules.users.router import router as users_router
 
 logger = logging.getLogger("nexusai")
 
@@ -55,5 +60,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Unhandled exceptions are turned into a 500 JSON response (with the request ID)
     # by RequestContextMiddleware, so no generic exception handler is registered here.
-    app.include_router(health.router, prefix=settings.api_prefix)
+    for router in (health.router, auth_router, users_router, organizations_router, audit_router):
+        app.include_router(router, prefix=settings.api_prefix)
     return app

@@ -10,6 +10,7 @@ from logging.config import fileConfig
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+import app.db.models  # noqa: F401  (registers every table on Base.metadata)
 from alembic import context
 from app.core.config import Settings
 from app.db.base import Base
@@ -18,7 +19,6 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Import model modules here as they are added, so autogenerate can see them.
 target_metadata = Base.metadata
 
 

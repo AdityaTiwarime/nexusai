@@ -35,13 +35,17 @@ def test_settings_load_from_environment_like_docker(monkeypatch, raw, expected):
 
 
 def test_production_flag():
-    assert make_settings(environment="production").is_production
+    assert make_settings(
+        environment="production", jwt_secret="x" * 40, cookie_secure=True
+    ).is_production
     assert not make_settings(environment="local").is_production
 
 
 def test_docs_disabled_in_production():
     from app.main import create_app
 
-    app = create_app(make_settings(environment="production"))
+    app = create_app(
+        make_settings(environment="production", jwt_secret="x" * 40, cookie_secure=True)
+    )
     assert app.docs_url is None
     assert app.openapi_url is None

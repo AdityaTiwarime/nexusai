@@ -8,8 +8,11 @@ import json
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, PostgresDsn, field_validator
+from pydantic import Field, PostgresDsn, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Only for local development and tests. Startup refuses it in staging/production.
+DEV_JWT_SECRET = "dev-only-insecure-jwt-secret-change-me-0123456789"
 
 
 class Settings(BaseSettings):
@@ -42,6 +45,28 @@ class Settings(BaseSettings):
     )
 
     api_prefix: str = "/api/v1"
+
+    # --- Authentication ---
+    jwt_secret: SecretStr = SecretStr(DEV_JWT_SECRET)
+    jwt_algorithm: Literal["HS256"] = "HS256"
+    jwt_issuer: str = "nexusai"
+    access_token_minutes: int = Field(default=15, ge=1, le=120)
+    refresh_token_days: int = Field(default=7, ge=1, le=90)
+    # The refresh token lives in an httpOnly cookie. `secure` must be on wherever HTTPS is used.
+    refresh_cookie_name: str = "nexus_refresh"
+    cookie_secure: bool = False
+    # Lets anyone create a new organization (fine for a demo; turn off for private deployments).
+    allow_public_signup: bool = True
+
+    @model_validator(mode="after")
+    def check_production_security(self) -> "Settings":
+        if self.environment in ("staging", "production"):
+            secret = self.jwt_secret.get_secret_value()
+            if secret == DEV_JWT_SECRET or len(secret) < 32:
+                raise ValueError("Set NEXUS_JWT_SECRET to a random value of at least 32 characters")
+            if not self.cookie_secure:
+                raise ValueError("NEXUS_COOKIE_SECURE must be true in staging/production")
+        return self
 
     @field_validator("database_url")
     @classmethod
