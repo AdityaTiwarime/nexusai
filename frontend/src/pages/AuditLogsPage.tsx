@@ -14,6 +14,11 @@ const ACTIONS = [
   "organization.registered",
   "user.created",
   "user.updated",
+  "document.uploaded",
+  "document.version_added",
+  "document.reprocess_requested",
+  "document.updated",
+  "document.deleted",
 ];
 
 function describe(details: Record<string, unknown>): string {

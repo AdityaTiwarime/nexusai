@@ -13,9 +13,12 @@ from app.api import health
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
+from app.core.rate_limit import build_rate_limiter
 from app.db.session import Database
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
+from app.modules.documents.router import router as documents_router
+from app.modules.documents.storage import LocalStorage
 from app.modules.organizations.router import router as organizations_router
 from app.modules.users.router import router as users_router
 
@@ -30,10 +33,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.settings = settings
         app.state.db = Database(settings)
+        app.state.storage = LocalStorage(settings.storage_dir)
+        app.state.rate_limiter = build_rate_limiter(settings.redis_url, settings.rate_limit_enabled)
         logger.info("startup", extra={"environment": settings.environment, "version": __version__})
         try:
             yield
         finally:
+            await app.state.rate_limiter.aclose()
             await app.state.db.dispose()
             logger.info("shutdown")
 
@@ -60,6 +66,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Unhandled exceptions are turned into a 500 JSON response (with the request ID)
     # by RequestContextMiddleware, so no generic exception handler is registered here.
-    for router in (health.router, auth_router, users_router, organizations_router, audit_router):
+    routers = (
+        health.router,
+        auth_router,
+        users_router,
+        organizations_router,
+        audit_router,
+        documents_router,
+    )
+    for router in routers:
         app.include_router(router, prefix=settings.api_prefix)
     return app

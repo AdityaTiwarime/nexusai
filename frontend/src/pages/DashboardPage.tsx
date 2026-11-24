@@ -15,18 +15,22 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function DependencyRow({ name, check }: { name: string; check: CheckResult }) {
+  const label = check.status === "ok" ? "Healthy" : check.status === "disabled" ? "Disabled" : "Down";
+  const tone = check.status === "ok" ? "ok" : check.status === "disabled" ? "pending" : "error";
   return (
     <li className="flex items-center justify-between py-2">
-      <span className="text-sm font-medium capitalize text-slate-800">{name}</span>
+      <span className="text-sm font-medium text-slate-800">
+        <span className="capitalize">{name}</span>
+        {check.critical === false && (
+          <span className="ml-2 text-xs font-normal text-slate-400">optional</span>
+        )}
+      </span>
       <span className="flex items-center gap-3">
         {check.latency_ms !== null && (
           <span className="text-xs tabular-nums text-slate-500">{check.latency_ms} ms</span>
         )}
         {check.error && <span className="text-xs text-rose-600">{check.error}</span>}
-        <StatusBadge
-          tone={check.status === "ok" ? "ok" : "error"}
-          label={check.status === "ok" ? "Healthy" : "Down"}
-        />
+        <StatusBadge tone={tone} label={label} />
       </span>
     </li>
   );

@@ -17,7 +17,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { label: "Dashboard", to: "/" },
   { label: "AI Chat", phase: 4 },
-  { label: "Documents", phase: 3 },
+  { label: "Documents", to: "/documents", roles: ["org_admin", "manager", "employee"] },
   { label: "Search", phase: 4 },
   { label: "Agent Workflows", phase: 5 },
   { label: "Approvals", phase: 5 },

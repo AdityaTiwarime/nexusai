@@ -58,6 +58,47 @@ class Settings(BaseSettings):
     # Lets anyone create a new organization (fine for a demo; turn off for private deployments).
     allow_public_signup: bool = True
 
+    # --- Redis (rate limiting) ---
+    redis_url: str = "redis://localhost:6379/0"
+    # If Redis is down, requests are allowed (fail open) and a warning is logged.
+    rate_limit_enabled: bool = True
+    login_rate_limit_per_ip: int = Field(default=20, ge=1)  # attempts per minute per IP
+    login_failures_per_account: int = Field(default=5, ge=1)  # failures per 15 min per email
+    register_rate_limit_per_ip: int = Field(default=10, ge=1)  # sign-ups per hour per IP
+
+    # --- Documents ---
+    storage_dir: str = "./data/uploads"
+    max_upload_mb: int = Field(default=20, ge=1, le=200)
+    chunk_size: int = Field(default=1200, ge=200, le=8000)  # characters
+    chunk_overlap: int = Field(default=200, ge=0, le=2000)  # characters
+
+    # --- Embeddings ---
+    # "hashing" = deterministic, offline, NOT semantic (dev/tests). "openai" = real embeddings.
+    embedding_provider: Literal["hashing", "openai"] = "hashing"
+    embedding_model: str = "text-embedding-3-small"
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    embedding_batch_size: int = Field(default=64, ge=1, le=512)
+    embedding_timeout_seconds: float = Field(default=30, gt=0, le=300)
+
+    # --- Background worker ---
+    worker_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    job_max_attempts: int = Field(default=3, ge=1, le=10)
+    job_retry_base_seconds: float = Field(default=5.0, ge=0)
+    job_lock_timeout_seconds: int = Field(default=300, ge=10)  # reclaim jobs from crashed workers
+    # Touched by the worker on every loop; docker-compose's healthcheck reads its age.
+    worker_heartbeat_file: str = "/tmp/nexus-worker-heartbeat"
+
+    @model_validator(mode="after")
+    def check_documents_and_embeddings(self) -> "Settings":
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError("chunk_overlap must be smaller than chunk_size")
+        if self.embedding_provider == "openai" and not self.openai_api_key:
+            raise ValueError(
+                "NEXUS_OPENAI_API_KEY is required when NEXUS_EMBEDDING_PROVIDER=openai"
+            )
+        return self
+
     @model_validator(mode="after")
     def check_production_security(self) -> "Settings":
         if self.environment in ("staging", "production"):

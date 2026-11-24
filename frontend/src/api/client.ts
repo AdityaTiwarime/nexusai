@@ -25,6 +25,9 @@ export class ApiError extends Error {
     const body = this.body as { detail?: unknown } | null;
     const detail = body?.detail;
     if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object" && "message" in detail) {
+      return String((detail as { message: unknown }).message);
+    }
     if (Array.isArray(detail) && detail.length > 0) {
       const first = detail[0] as { msg?: string; loc?: unknown[] };
       const field = Array.isArray(first.loc) ? String(first.loc[first.loc.length - 1]) : "";
@@ -52,7 +55,10 @@ export const tokenStore = {
 async function rawRequest(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  // FormData bodies (file uploads) need the browser to set the multipart boundary itself.
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   return fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "same-origin" });
 }
@@ -97,7 +103,7 @@ export async function refreshSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function send(path: string, init: RequestInit = {}): Promise<Response> {
   let response = await rawRequest(path, init);
   if (response.status === 401 && accessToken && !path.startsWith("/auth/")) {
     if (await refreshSession()) {
@@ -106,16 +112,35 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       onSessionExpired?.();
     }
   }
-  return parse<T>(path, response);
+  return response;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  return parse<T>(path, await send(path, init));
+}
+
+/** Download a file that needs the Authorization header (so a plain <a href> won't do). */
+async function download(path: string, filename: string): Promise<void> {
+  const response = await send(path);
+  if (!response.ok) await parse<never>(path, response);
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 // --- types -----------------------------------------------------------------------
 
 export type CheckStatus = "ok" | "error";
 export type Role = "super_admin" | "org_admin" | "manager" | "employee";
+export type DocRole = Exclude<Role, "super_admin">;
 
 export interface CheckResult {
-  status: CheckStatus;
+  status: CheckStatus | "disabled";
+  /** false = the platform keeps working without it (e.g. Redis for rate limiting). */
+  critical?: boolean;
   latency_ms: number | null;
   error: string | null;
 }
@@ -201,6 +226,63 @@ export interface UserUpdateInput {
   is_active?: boolean;
 }
 
+export type DocumentStatus = "queued" | "processing" | "ready" | "failed";
+
+export interface DocumentVersion {
+  id: string;
+  version: number;
+  original_filename: string;
+  size_bytes: number;
+  sha256: string;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
+export interface DocumentSummary {
+  id: string;
+  title: string;
+  file_type: string;
+  min_role: DocRole;
+  status: DocumentStatus;
+  current_version: number;
+  chunk_count: number;
+  page_count: number | null;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  uploaded_by: string | null;
+  uploaded_by_email: string | null;
+  created_at: string;
+  updated_at: string;
+  processed_at: string | null;
+}
+
+export interface DocumentDetail extends DocumentSummary {
+  versions: DocumentVersion[];
+}
+
+export interface DocumentPage {
+  items: DocumentSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+  status_counts: Partial<Record<DocumentStatus, number>>;
+}
+
+export interface Chunk {
+  chunk_index: number;
+  content: string;
+  page_start: number | null;
+  page_end: number | null;
+  char_count: number;
+}
+
+export interface ChunkPage {
+  items: Chunk[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // --- endpoints ---------------------------------------------------------------------
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -239,4 +321,40 @@ export const api = {
     const qs = query.toString();
     return request<AuditLogPage>(`/audit-logs${qs ? `?${qs}` : ""}`);
   },
+
+  listDocuments: (
+    params: { limit?: number; offset?: number; status?: DocumentStatus; q?: string } = {},
+  ) => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.offset) query.set("offset", String(params.offset));
+    if (params.status) query.set("status", params.status);
+    if (params.q) query.set("q", params.q);
+    const qs = query.toString();
+    return request<DocumentPage>(`/documents${qs ? `?${qs}` : ""}`);
+  },
+  getDocument: (id: string) => request<DocumentDetail>(`/documents/${id}`),
+  uploadDocument: (file: File, options: { title?: string; min_role?: DocRole } = {}) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (options.title) form.append("title", options.title);
+    if (options.min_role) form.append("min_role", options.min_role);
+    return request<DocumentDetail>("/documents", { method: "POST", body: form });
+  },
+  uploadVersion: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<DocumentDetail>(`/documents/${id}/versions`, { method: "POST", body: form });
+  },
+  updateDocument: (id: string, input: { title?: string; min_role?: DocRole }) =>
+    request<DocumentDetail>(`/documents/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  reprocessDocument: (id: string) =>
+    request<DocumentDetail>(`/documents/${id}/reprocess`, { method: "POST" }),
+  deleteDocument: (id: string) => request<void>(`/documents/${id}`, { method: "DELETE" }),
+  documentChunks: (id: string, params: { limit?: number; offset?: number } = {}) =>
+    request<ChunkPage>(
+      `/documents/${id}/chunks?limit=${params.limit ?? 20}&offset=${params.offset ?? 0}`,
+    ),
+  downloadDocument: (id: string, version: DocumentVersion) =>
+    download(`/documents/${id}/download?version=${version.version}`, version.original_filename),
 };

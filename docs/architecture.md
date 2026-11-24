@@ -26,7 +26,7 @@ flowchart TB
 
     subgraph Data
         PG[(PostgreSQL + pgvector)]
-        REDIS[(Redis<br/>queues · cache · rate limits)]
+        REDIS[(Redis<br/>rate limits · cache)]
         KAFKA[(Kafka<br/>domain event log)]
     end
 
@@ -53,7 +53,8 @@ flowchart TB
     WF --> PG
     AUD --> PG
     API --> REDIS
-    REDIS --> Workers
+    API -->|jobs table| PG
+    PG -->|SKIP LOCKED claim| Workers
     Workers --> PG
     Workers --> LLM
     API -. events .-> KAFKA
@@ -68,7 +69,7 @@ flowchart TB
 | Component | Responsibility | Phase |
 |---|---|---|
 | Frontend | Dashboard, chat workspace, documents, approvals, admin, observability pages | 1 → 10 |
-| HTTP layer | Routing, CORS, request/correlation IDs, error envelope, rate limiting | 1 (IDs), 2 (rate limits) |
+| HTTP layer | Routing, CORS, request/correlation IDs, error envelope, rate limiting | 1 (IDs), 3 (rate limits) |
 | Auth / RBAC / tenancy | Users, orgs, roles, JWT access + refresh tokens, tenant-scoped queries | 2 |
 | Document intelligence | Upload validation, text + metadata extraction, chunking, embeddings, versioning, dedupe | 3 |
 | RAG engine | Query preprocessing, hybrid retrieval, permission filtering, reranking, cited answers, "insufficient evidence" responses | 4 |
@@ -79,6 +80,35 @@ flowchart TB
 | Audit & analytics | Append-only audit log of security-relevant and AI actions | 2+ |
 | Observability | OTel traces and metrics (app, AI, infra), Grafana dashboards | 8 |
 | Incident investigation | Gathers traces/logs/metrics, builds a timeline, separates evidence from AI hypotheses, retrieves runbooks | 9 |
+
+## Document ingestion flow (Phase 3)
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as FastAPI
+    participant S as File storage (volume)
+    participant D as PostgreSQL
+    participant W as Worker
+    participant E as Embedding provider
+
+    B->>A: POST /documents (multipart)
+    A->>A: validate type, content, size; sha256 duplicate check
+    A->>S: write original file
+    A->>D: INSERT document, version, job, audit event (one transaction)
+    A-->>B: 201 {status: queued}
+    loop every second
+        W->>D: claim next job (FOR UPDATE SKIP LOCKED)
+    end
+    W->>S: read file
+    W->>W: parse → chunk
+    W->>E: embed chunks (batched)
+    W->>D: replace chunks + mark ready (one transaction)
+    B->>A: GET /documents/{id} (polls while queued/processing)
+    A-->>B: {status: ready, chunk_count}
+```
+
+Details: [`ai-design.md`](ai-design.md) (pipeline) and [`operations.md`](operations.md) (running the worker).
 
 ## Request flow (Phase 1)
 
@@ -106,4 +136,5 @@ sequenceDiagram
 4. **Request IDs from day one.** Every response carries `X-Request-ID`, and every log line includes it. Phase 8 links the same ID to OpenTelemetry trace IDs, so a request can be followed across the API, RAG pipeline, agents and connectors.
 5. **Configuration through environment variables** (pydantic-settings), validated at startup. Secrets never live in the repo; `.env.example` documents every variable.
 6. **Same-origin API in Docker.** nginx serves the built frontend and proxies `/api` to the backend, so the browser never needs CORS in the containerised setup. CORS is still configured for the Vite dev server.
-7. **Provider-agnostic LLM layer (Phase 4).** Application code depends on an interface, not on one vendor's SDK; a deterministic fake provider keeps tests and demos runnable without API keys.
+7. **Provider-agnostic AI layer.** Application code depends on an interface, not on one vendor's SDK; a deterministic offline provider keeps tests and demos runnable without API keys. Embeddings use it since Phase 3; chat models join in Phase 4.
+8. **PostgreSQL as the job queue, Redis for rate limits only (Phase 3).** Jobs are written in the same transaction as the upload, so work can't be lost or orphaned, and a Redis outage never stops ingestion or logins (the rate limiter fails open).

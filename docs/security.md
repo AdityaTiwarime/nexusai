@@ -54,6 +54,20 @@ Security-relevant events are written to `audit_logs` **in the same transaction**
 
 Each entry stores the actor, IP address and **request ID**, which matches the `X-Request-ID` response header and the server log lines for that request. Audit logs are only readable by org admins, and only for their own organization.
 
+## Rate limiting
+
+Backed by Redis, so limits hold across several API replicas.
+
+| Limit | Default | Setting |
+|---|---|---|
+| Login attempts per IP | 20 per minute | `NEXUS_LOGIN_RATE_LIMIT_PER_IP` |
+| **Failed** logins per account | 5 per 15 minutes; after that even the right password gets 429 until the window ends | `NEXUS_LOGIN_FAILURES_PER_ACCOUNT` |
+| Sign-ups per IP | 10 per hour | `NEXUS_REGISTER_RATE_LIMIT_PER_IP` |
+
+Responses are `429` with `Retry-After`. IPs and emails are stored in Redis only as SHA-256 hashes. If Redis is unreachable the limiter **fails open** (requests allowed, warning logged): availability of login is preferred, and Argon2id still makes guessing slow. Trade-off: the per-account limit lets an attacker temporarily lock a known email out; the window is short (15 minutes) and this is the standard compromise.
+
+Behind the bundled nginx, the API trusts `X-Forwarded-For` (`FORWARDED_ALLOW_IPS` in `docker-compose.yml`) so limits apply to real client IPs. That's only safe while the backend port isn't exposed to the internet directly.
+
 ## Configuration safety
 
 Startup **refuses to run in staging or production** if:
@@ -67,7 +81,7 @@ API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses 
 
 | Threat | Mitigation |
 |---|---|
-| Credential stuffing / password guessing | Argon2id hashing, generic errors, failed-login audit trail. **Rate limiting is not yet implemented** (see below). |
+| Credential stuffing / password guessing | Argon2id hashing, generic errors, failed-login audit trail, and **rate limiting** (see below). |
 | Stolen access token | 15-minute lifetime; role and active status re-checked on every request. |
 | Stolen refresh token | httpOnly cookie, rotation, reuse detection with family revocation. |
 | Forged or tampered JWT | Signature check with pinned algorithm; `alg: none` and foreign keys rejected (tested). |
@@ -76,12 +90,14 @@ API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses 
 | CSRF | Refresh cookie is `SameSite=Strict` and path-scoped; all other endpoints require a Bearer header, which browsers never attach automatically. |
 | Account enumeration | Identical response and timing for unknown email vs. wrong password; 404 for foreign IDs. |
 | Leaking internals | Generic 500 responses with request ID only; readiness check exposes only the error type. |
+| Malicious uploads | Extension allow-list **and** content checks (magic bytes, DOCX structure, text decoding), size limit, DOCX zip-bomb guard. Files are stored under server-generated keys, never user file names (no path traversal). Downloads are always `application/octet-stream` + `Content-Disposition: attachment` + `nosniff`, so an uploaded file is never rendered by the browser. |
+| Seeing restricted documents | Per-document `min_role`, applied in the SQL query; hidden documents return 404 like missing ones; duplicates of hidden documents don't reveal their ID (tested). |
 
 ## Known limitations (planned)
 
 | Limitation | Plan |
 |---|---|
-| No rate limiting on login/register | Phase 3 adds Redis; login throttling per IP and per account comes with it. |
+| No malware scanning of uploads | Add a ClamAV (or cloud) scan step in the worker before parsing (Phase 10). |
 | No email verification or password reset | Requires an email provider; planned with the integrations work (Phase 6). |
 | No MFA or SSO (OAuth2/OIDC) | OIDC sign-in is planned alongside the enterprise connectors (Phase 6). |
 | Admin sets the first password for new users | Replace with invite links once email is available. |

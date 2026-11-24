@@ -97,9 +97,10 @@ All business tables carry `organization_id` (tenant key) and are queried through
 | (roles) | stored as a constrained `role` column on users, see `database-design.md` | Phase 2 ✅ |
 | refresh_tokens | id, user_id, family_id, token_hash, expires_at, revoked_at | Phase 2 ✅ |
 | audit_logs | id, organization_id, actor_id, action, target, ip, request_id, details JSONB, created_at | Phase 2 ✅ |
-| documents | id, organization_id, uploaded_by, filename, file_type, sha256 (unique per org), status, current_version | Phase 3 |
-| document_versions | id, document_id, version, storage_path, created_at | Phase 3 |
-| document_chunks | id, document_version_id, organization_id, chunk_index, content, tsv (tsvector), embedding (vector) | Phase 3 |
+| documents | id, organization_id, uploaded_by, title, file_type, min_role, status, current_version, chunk_count | Phase 3 ✅ |
+| document_versions | id, document_id, version, storage_key, sha256 (unique per org), size | Phase 3 ✅ |
+| document_chunks | id, document_id, version_id, organization_id, chunk_index, content, pages, tsv (tsvector), embedding (vector) | Phase 3 ✅ |
+| ingestion_jobs | id, document_id, version_id, status, attempts, run_after, locked_at | Phase 3 ✅ |
 | conversations / messages | id, organization_id, user_id; message role, content, citations JSONB | Phase 4 |
 | agent_definitions / tool_definitions | name, description, allowed_roles, is_mutating | Phase 5 |
 | agent_executions / workflow_runs | id, state, plan JSONB, steps JSONB, started/finished timestamps | Phase 5 |
@@ -112,7 +113,7 @@ Key decisions:
 
 - **UUID primary keys** (no guessable sequential IDs across tenants).
 - **Composite indexes starting with `organization_id`** on every tenant table.
-- **Unique `(organization_id, sha256)`** on documents for duplicate detection.
+- **Unique `(organization_id, sha256)`** on document versions for duplicate detection.
 - **HNSW index** on `document_chunks.embedding` and a **GIN index** on `tsv` for hybrid retrieval.
 - **Unique `idempotency_key`** on events so replays never create duplicate business actions.
 
@@ -181,9 +182,15 @@ On your machine:
 | User management (add, change role, deactivate) | ✅ Implemented (Phase 2) |
 | Audit log (API + UI) | ✅ Implemented (Phase 2) |
 | Super-admin CLI | ✅ Implemented (Phase 2) |
-| Login rate limiting | ⏳ Planned (Phase 3, with Redis) |
+| Login and sign-up rate limiting (Redis, fails open) | ✅ Implemented (Phase 3) |
+| Document upload with validation, duplicate detection, versions, role-based visibility | ✅ Implemented (Phase 3) |
+| Parsing (PDF, DOCX, TXT, CSV, MD), chunking with overlap and page tracking | ✅ Implemented (Phase 3) |
+| Embeddings via provider interface (offline hashing provider; OpenAI provider) stored in pgvector | ✅ Implemented (Phase 3). OpenAI provider tested against a mocked API only |
+| Background worker (PostgreSQL queue, retries with backoff, crash recovery, superseded jobs) | ✅ Implemented (Phase 3) |
+| Documents UI (upload, status, versions, chunks, reprocess, delete) | ✅ Implemented (Phase 3) |
+| OCR for scanned PDFs, malware scanning | ⏳ Not planned yet / Phase 10 |
 | Email verification, password reset, SSO/MFA | ⏳ Planned (Phase 6) |
-| Everything else | ⏳ Planned (Phases 3–10) |
+| Everything else | ⏳ Planned (Phases 4–10) |
 
 ## 9. Feature verification matrix
 
@@ -202,4 +209,8 @@ Filled in only from real test runs and evidence. See `docs/testing.md`.
 | Enterprise connectors | No | No | — |
 | Observability | No | No | — |
 | Incident investigation | No | No | — |
-| Docker deployment | Yes | Yes (CI builds all images and checks health) | `.github/workflows/ci.yml` (docker job) |
+| Docker deployment | Yes | Yes (CI builds all images, checks health, and runs an upload → worker → chunks smoke test) | `.github/workflows/ci.yml` (docker job), `scripts/smoke_test.py` |
+| Document ingestion pipeline | Yes | Yes | `backend/tests/test_documents.py`, `test_parsing_and_chunking.py`, `test_embeddings.py` |
+| Worker reliability (retries, crash recovery, concurrency) | Yes | Yes | `backend/tests/test_ingestion_worker.py` |
+| Rate limiting | Yes | Yes (real Redis) | `backend/tests/test_rate_limit.py` |
+| Documents UI | Yes | Yes | `frontend/src/test/documents.test.tsx`, browser run in `docs/testing.md` |

@@ -16,8 +16,10 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 
-# Run as an unprivileged user.
-RUN useradd --create-home --uid 10001 nexus
+# Run as an unprivileged user. /data/uploads is owned by it, so a fresh Docker
+# volume mounted there is writable too.
+RUN useradd --create-home --uid 10001 nexus \
+    && mkdir -p /data/uploads && chown -R nexus:nexus /data
 USER nexus
 
 EXPOSE 8000
@@ -25,5 +27,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health/live', timeout=2).status == 200 else 1)"
 
-# Apply migrations, then start the API.
+# Apply migrations, then start the API. (The worker overrides this: `python -m app.worker`.)
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.asgi:app --host 0.0.0.0 --port 8000 --proxy-headers"]

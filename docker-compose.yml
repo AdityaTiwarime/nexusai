@@ -1,8 +1,24 @@
 name: nexusai
 
+# Settings shared by the API and the worker (same image, same configuration).
+x-backend-env: &backend-env
+  NEXUS_ENVIRONMENT: ${NEXUS_ENVIRONMENT:-local}
+  NEXUS_LOG_LEVEL: ${NEXUS_LOG_LEVEL:-INFO}
+  NEXUS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nexus}:${POSTGRES_PASSWORD:-nexus}@db:5432/${POSTGRES_DB:-nexusai}
+  NEXUS_REDIS_URL: redis://redis:6379/0
+  NEXUS_CORS_ORIGINS: ${NEXUS_CORS_ORIGINS:-http://localhost:5173}
+  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
+  NEXUS_COOKIE_SECURE: ${NEXUS_COOKIE_SECURE:-false}
+  NEXUS_ALLOW_PUBLIC_SIGNUP: ${NEXUS_ALLOW_PUBLIC_SIGNUP:-true}
+  NEXUS_STORAGE_DIR: /data/uploads
+  NEXUS_MAX_UPLOAD_MB: ${NEXUS_MAX_UPLOAD_MB:-20}
+  NEXUS_EMBEDDING_PROVIDER: ${NEXUS_EMBEDDING_PROVIDER:-hashing}
+  NEXUS_EMBEDDING_MODEL: ${NEXUS_EMBEDDING_MODEL:-text-embedding-3-small}
+  NEXUS_OPENAI_API_KEY: ${NEXUS_OPENAI_API_KEY:-}
+
 services:
   db:
-    # PostgreSQL 16 with the pgvector extension available (used from Phase 3).
+    # PostgreSQL 16 with the pgvector extension (document embeddings).
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-nexus}
@@ -19,20 +35,52 @@ services:
       timeout: 3s
       retries: 10
 
+  redis:
+    # Rate limiting. Not critical: the API keeps working (fails open) if Redis is down.
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build: ./backend
     environment:
-      NEXUS_ENVIRONMENT: ${NEXUS_ENVIRONMENT:-local}
-      NEXUS_LOG_LEVEL: ${NEXUS_LOG_LEVEL:-INFO}
-      NEXUS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-nexus}:${POSTGRES_PASSWORD:-nexus}@db:5432/${POSTGRES_DB:-nexusai}
-      NEXUS_CORS_ORIGINS: ${NEXUS_CORS_ORIGINS:-http://localhost:5173}
-      NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
-      NEXUS_COOKIE_SECURE: ${NEXUS_COOKIE_SECURE:-false}
-      NEXUS_ALLOW_PUBLIC_SIGNUP: ${NEXUS_ALLOW_PUBLIC_SIGNUP:-true}
+      <<: *backend-env
+      # Trust X-Forwarded-For from the bundled nginx so rate limits and audit logs see the
+      # real client IP. Only safe while the backend port isn't reachable from the internet.
+      FORWARDED_ALLOW_IPS: "*"
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - uploads:/data/uploads
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    # Same image as the API; processes uploaded documents in the background.
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *backend-env
+    volumes:
+      - uploads:/data/uploads
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      # The backend container runs the migrations, so wait for it.
+      backend:
         condition: service_healthy
 
   frontend:
@@ -45,3 +93,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:

@@ -21,3 +21,6 @@ dist/
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Local document storage (NEXUS_STORAGE_DIR)
+backend/data/

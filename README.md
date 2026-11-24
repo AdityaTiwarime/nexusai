@@ -4,10 +4,12 @@
 
 **Enterprise Intelligence & Autonomous Workflow Platform.** A portfolio implementation of the kind of system a Forward Deployed Engineer builds: it connects scattered company knowledge, business applications and workflows into one secure, AI-powered platform with cited answers, approval-gated AI agents and full observability.
 
-> **Status: Phases 1–2 of 10 complete** (foundation; authentication, roles and multi-tenancy). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
+> **Status: Phases 1–3 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
 
-| User management | Audit log |
+| Documents | Document detail |
 |---|---|
+| ![Documents](docs/screenshots/documents.png) | ![Document detail](docs/screenshots/document-detail.png) |
+| **User management** | **Audit log** |
 | ![Users](docs/screenshots/users.png) | ![Audit logs](docs/screenshots/audit-logs.png) |
 
 ## The business problem
@@ -23,6 +25,18 @@ A 5,000-person company keeps knowledge in documents, a CRM, a ticketing system a
 All data is synthetic. No real customer data or credentials are used.
 
 ## What works today
+
+**Phase 3: document intelligence**
+
+- **Upload** PDF, Word, text, CSV and Markdown files. Files are checked by **content, not just extension** (a renamed `.exe` is rejected), with a size limit and a zip-bomb guard. **Duplicate uploads are detected** by SHA-256 within an organization.
+- **Background processing** in a separate worker: text extraction (with **PDF page numbers**), structure-aware **chunking with overlap**, and **embeddings stored in PostgreSQL with pgvector** next to a full-text index, ready for hybrid search in Phase 4.
+- **Reliable job queue** in PostgreSQL: retries with exponential backoff, recovery of jobs from crashed workers, several workers in parallel without double-processing, and outdated jobs skipped when a newer version is uploaded.
+- **Versioning**: upload a new version, keep older files downloadable, chunks are replaced atomically.
+- **Per-document visibility** (everyone / managers / admins only), enforced in the database query. Hidden documents behave like missing ones.
+- **Embedding providers behind one interface**: an offline deterministic provider (default; lexical, **not semantic**) and an OpenAI provider for real semantic embeddings.
+- **Login and sign-up rate limiting** with Redis (per IP and per account); if Redis is down, logins keep working.
+- **Documents UI**: upload, live status, failure reasons, status filters and search, versions, extracted chunks, reprocess, delete.
+- Details: [`docs/ai-design.md`](docs/ai-design.md) and [`docs/operations.md`](docs/operations.md).
 
 **Phase 2: secure multi-tenant access**
 
@@ -42,7 +56,7 @@ All data is synthetic. No real customer data or credentials are used.
 - **React + TypeScript dashboard** (Vite, Tailwind, React Router, TanStack Query) showing live system status, with the navigation for all upcoming modules.
 - **Docker Compose** for PostgreSQL (pgvector image), backend and frontend (nginx), with health-checked startup ordering.
 - **GitHub Actions CI**: lint, backend tests against real PostgreSQL, frontend type check/tests/build, dependency audits, and a full Docker stack health check.
-- **Tests**: 59 backend + 14 frontend, all passing, plus a browser end-to-end run. Details in [`docs/testing.md`](docs/testing.md).
+- **Tests** (all phases): 131 backend + 23 frontend, all passing, plus browser end-to-end runs and a CI smoke test that uploads a document through the Docker stack. Details in [`docs/testing.md`](docs/testing.md).
 
 ## Architecture
 
@@ -50,18 +64,23 @@ All data is synthetic. No real customer data or credentials are used.
 flowchart LR
     UI[React SPA] -->|/api| NGINX[nginx] --> API[FastAPI]
     API --> PG[(PostgreSQL + pgvector)]
-    API -. later .-> REDIS[(Redis)] & KAFKA[(Kafka)] & LLM[LLM providers]
+    API --> REDIS[(Redis<br/>rate limits)]
+    API --> FILES[(Uploads volume)]
+    WORKER[Ingestion worker] -->|claims jobs| PG
+    WORKER --> FILES
+    WORKER --> EMB[Embedding provider]
+    API -. later .-> KAFKA[(Kafka)] & LLM[LLM providers]
 ```
 
 Full diagrams, component responsibilities and design decisions: [`docs/architecture.md`](docs/architecture.md).
 
 ## Tech stack
 
-| Layer | Now (Phase 1) | Planned |
+| Layer | Now (Phase 3) | Planned |
 |---|---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, React Router, TanStack Query | — |
-| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2 | LangGraph, LangChain, background workers |
-| Data | PostgreSQL 16 | pgvector, Redis, Kafka |
+| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx; background worker | LangGraph, LangChain |
+| Data | PostgreSQL 16 + pgvector, Redis | Kafka |
 | Infra | Docker, Docker Compose, GitHub Actions | AWS, Terraform (if deployed) |
 | Observability | Structured logs, request IDs | OpenTelemetry, Prometheus, Grafana |
 | Testing | pytest, Vitest, Testing Library | Playwright, Locust |
@@ -79,7 +98,7 @@ docker compose up --build
 
 Then open:
 
-- App: http://localhost:5173 (click **Create an organization** to get started)
+- App: http://localhost:5173 (click **Create an organization** to get started, then open **Documents**)
 - API docs (Swagger): http://localhost:8000/docs
 - Readiness: http://localhost:8000/api/v1/health/ready
 
@@ -88,8 +107,8 @@ Stop with `Ctrl+C`, or `docker compose down` (add `-v` to also delete the databa
 ## Local development (without Docker for the app)
 
 ```bash
-# 1. Database only, in Docker
-docker compose up -d db
+# 1. Database and Redis only, in Docker
+docker compose up -d db redis
 
 # 2. Backend (terminal 1)
 cd backend
@@ -100,6 +119,9 @@ cp ../.env.example .env
 alembic upgrade head
 uvicorn app.asgi:app --reload --port 8000
 
+# 2b. Worker (another terminal, same folder and venv): processes uploads
+python -m app.worker
+
 # 3. Frontend (terminal 2)
 cd frontend
 npm install
@@ -109,9 +131,10 @@ npm run dev                        # http://localhost:5173, proxies /api to :800
 ## Running tests
 
 ```bash
-# Backend (needs the db container running)
+# Backend (needs the db and redis containers running)
 cd backend
 export NEXUS_TEST_DATABASE_URL=postgresql+asyncpg://nexus:nexus@localhost:5432/nexusai_test
+export NEXUS_TEST_REDIS_URL=redis://localhost:6379/15
 pytest -v
 
 # Frontend
@@ -140,6 +163,15 @@ Interactive docs: http://localhost:8000/docs (disabled in production).
 | PATCH | `/api/v1/users/{id}` | org admin | Change name, role or active status |
 | GET | `/api/v1/audit-logs` | org admin | Organization's audit events (paginated, filterable) |
 | GET | `/api/v1/admin/organizations` | super admin | All organizations |
+| POST | `/api/v1/documents` | manager, org admin | Upload (multipart: `file`, optional `title`, `min_role`) |
+| GET | `/api/v1/documents` | org member | Visible documents (filters: `status`, `q`; paginated; counts per status) |
+| GET | `/api/v1/documents/{id}` | org member | Document with versions (404 if hidden or another org's) |
+| GET | `/api/v1/documents/{id}/chunks` | org member | Extracted chunks with page ranges |
+| GET | `/api/v1/documents/{id}/download` | org member | Original file (`?version=n` for older ones) |
+| POST | `/api/v1/documents/{id}/versions` | uploader, org admin | Upload a new version |
+| POST | `/api/v1/documents/{id}/reprocess` | uploader, org admin | Queue processing again |
+| PATCH | `/api/v1/documents/{id}` | uploader, org admin | Rename or change visibility |
+| DELETE | `/api/v1/documents/{id}` | uploader, org admin | Delete the document, its versions, chunks and files |
 
 **Creating the platform super admin** (there is deliberately no API for this):
 
@@ -157,6 +189,8 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 - [`docs/architecture.md`](docs/architecture.md): architecture diagrams and decisions
 - [`docs/security.md`](docs/security.md): authentication, RBAC, tenant isolation, threat model, known limitations
 - [`docs/database-design.md`](docs/database-design.md): ER diagram, constraints, indexes, design decisions
+- [`docs/ai-design.md`](docs/ai-design.md): ingestion pipeline, chunking, embedding providers, limitations
+- [`docs/operations.md`](docs/operations.md): services, worker, queries, troubleshooting
 - [`docs/testing.md`](docs/testing.md): test strategy and actual results
 
 ## Project structure
@@ -166,6 +200,7 @@ nexusai/
 ├── backend/            FastAPI app, Alembic migrations, tests
 ├── frontend/           React + TypeScript app, nginx config
 ├── infra/              Postgres init scripts (observability config in later phases)
+├── scripts/            End-to-end smoke test used by CI
 ├── docs/               Architecture, roadmap, security, database design, testing
 ├── .github/workflows/  CI pipeline
 └── docker-compose.yml

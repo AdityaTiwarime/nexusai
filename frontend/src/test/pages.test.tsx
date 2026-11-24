@@ -37,6 +37,26 @@ describe("Dashboard", () => {
   });
 });
 
+describe("Dashboard optional dependencies", () => {
+  it("marks Redis as optional and keeps the platform ready when it is down", async () => {
+    mockApi({
+      ...signedInRoutes(),
+      "GET /health/ready": jsonResponse({
+        status: "ok",
+        checks: {
+          database: { status: "ok", critical: true, latency_ms: 1.5, error: null },
+          redis: { status: "error", critical: false, latency_ms: null, error: "ConnectionError" },
+        },
+      }),
+    });
+    renderApp("/");
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(await screen.findByText("optional")).toBeInTheDocument();
+    expect(screen.getByText("ConnectionError")).toBeInTheDocument();
+    expect(screen.getByText("Down")).toBeInTheDocument();
+  });
+});
+
 describe("Role-based navigation", () => {
   it("shows Users and Audit Logs to an org admin", async () => {
     mockApi(signedInRoutes("org_admin"));

@@ -11,8 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_session, get_settings_dep
+from app.api.deps import get_rate_limiter, get_session, get_settings_dep
 from app.core.config import Settings
+from app.core.rate_limit import Decision, Limit, RateLimiter
 from app.modules.auth import service
 from app.modules.auth.deps import CurrentUser
 from app.modules.auth.models import Organization
@@ -29,6 +30,29 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+Limiter = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def _limits(settings: Settings) -> dict[str, Limit]:
+    return {
+        "login_ip": Limit("login_ip", settings.login_rate_limit_per_ip, 60),
+        "login_account": Limit("login_fail", settings.login_failures_per_account, 15 * 60),
+        "register_ip": Limit("register_ip", settings.register_rate_limit_per_ip, 3600),
+    }
+
+
+def _too_many(decision: Decision) -> HTTPException:
+    return HTTPException(
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        "Too many attempts. Please wait and try again.",
+        headers={"Retry-After": str(decision.retry_after)},
+    )
+
+
+def _client_ip(request: Request) -> str:
+    # Behind the bundled nginx, uvicorn's --proxy-headers sets this from X-Forwarded-For
+    # (see FORWARDED_ALLOW_IPS in docker-compose.yml).
+    return request.client.host if request.client else "unknown"
 
 
 def _cookie_path(settings: Settings) -> str:
@@ -70,10 +94,14 @@ async def register(
     response: Response,
     session: Session,
     settings: SettingsDep,
+    limiter: Limiter,
 ) -> TokenResponse:
     """Create a new organization with the caller as its first org admin, and sign in."""
     if not settings.allow_public_signup:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Public sign-up is disabled")
+    decision = await limiter.hit(_limits(settings)["register_ip"], _client_ip(request))
+    if not decision.allowed:
+        raise _too_many(decision)
     try:
         user = await service.register_organization(
             session,
@@ -98,13 +126,25 @@ async def login(
     response: Response,
     session: Session,
     settings: SettingsDep,
+    limiter: Limiter,
 ) -> TokenResponse:
+    limits = _limits(settings)
+    # Per IP: slows down one client trying many accounts.
+    decision = await limiter.hit(limits["login_ip"], _client_ip(request))
+    if not decision.allowed:
+        raise _too_many(decision)
+    # Per account: slows down many clients guessing one account's password.
+    # Checked before the password, so a locked account can't be probed further.
+    decision = await limiter.peek(limits["login_account"], body.email)
+    if not decision.allowed:
+        raise _too_many(decision)
     try:
         user = await service.authenticate(
             session, email=body.email, password=body.password, request=request
         )
     except service.AuthError as exc:
         await session.commit()  # keep the failed-login audit record
+        await limiter.hit(limits["login_account"], body.email)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from None
     tokens = await service.issue_tokens(session, user, settings)
     await session.commit()

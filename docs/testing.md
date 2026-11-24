@@ -7,19 +7,22 @@
 | Backend unit + integration | pytest, pytest-asyncio, httpx | A **real PostgreSQL** database (no SQLite stand-in), schema created by the real Alembic migrations, tables emptied after every test |
 | Migrations | pytest + Alembic CLI | Real PostgreSQL: upgrade → downgrade → upgrade, plus `alembic check` (models match migrations) |
 | Frontend | Vitest + Testing Library (jsdom) | Mocked `fetch` responses |
-| Full stack | Docker Compose in CI | db + backend + frontend containers, health-checked through nginx |
+| Worker reliability | pytest | Real PostgreSQL: retries, backoff, crash recovery, concurrent workers, superseded jobs |
+| Rate limiting | pytest | A **real Redis** (`NEXUS_TEST_REDIS_URL`), plus an unreachable one for fail-open |
+| Full stack | Docker Compose in CI | db + redis + backend + worker + frontend, health-checked, plus `scripts/smoke_test.py` (register → upload → worker → chunks through nginx) |
 | Browser end-to-end | Playwright (run manually, see below) | Live backend + frontend + PostgreSQL |
 
-Later phases add ingestion and reliability tests (Phase 3+), automated Playwright end-to-end tests in CI and Locust load tests (Phase 10).
+Later phases add automated Playwright end-to-end tests in CI and Locust load tests (Phase 10).
 
 ## Commands
 
 ```bash
-# Backend (needs PostgreSQL; `docker compose up -d db` gives you one)
+# Backend (needs PostgreSQL and Redis; `docker compose up -d db redis` gives you both)
 cd backend
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 export NEXUS_TEST_DATABASE_URL=postgresql+asyncpg://nexus:nexus@localhost:5432/nexusai_test
+export NEXUS_TEST_REDIS_URL=redis://localhost:6379/15   # db 15 is flushed by the tests
 pytest -v
 ruff check . && ruff format --check .
 
@@ -35,7 +38,7 @@ npm run build
 
 Latest run: 24 Nov 2026, Linux, Python 3.13, Node 22, PostgreSQL 16. GitHub Actions runs the same suites (plus the Docker stack check) on every push.
 
-### Backend: 59 passed
+### Backend: 131 passed
 
 | File | Tests | What it proves |
 |---|---|---|
@@ -44,20 +47,34 @@ Latest run: 24 Nov 2026, Linux, Python 3.13, Node 22, PostgreSQL 16. GitHub Acti
 | `test_config.py` | 7 | Non-async DB drivers rejected; settings load from plain env vars exactly as Docker passes them; production disables API docs |
 | `test_health.py` | 5 | Liveness/readiness, 503 on DB outage without leaking credentials or hosts |
 | `test_middleware.py` | 6 | Request IDs, safe 500 responses, CORS allow/deny |
-| `test_migrations.py` | 3 | Upgrade/downgrade/re-upgrade, a single head, and models match migrations |
+| `test_migrations.py` | 3 | Upgrade/downgrade/re-upgrade (including the pgvector tables), a single head, and models match migrations |
+| `test_parsing_and_chunking.py` | 23 | Disallowed extensions, empty and oversized files, **content that doesn't match its extension**, non-Word zips and a **DOCX zip bomb** are rejected; PDF text keeps **page numbers** and metadata; image-only and corrupt PDFs fail with a clear reason; DOCX paragraphs and tables; CSV rows become self-describing lines; BOM and Windows-1252 text; chunks respect the size limit, **overlap** with the previous chunk, **lose no text**, hard-split very long lines, track page ranges and drop NUL bytes |
+| `test_embeddings.py` | 12 | Hashing embedder is deterministic, unit-length and reflects word overlap; OpenAI provider (against a **mocked HTTP API**, no real calls) sends the right request, re-orders results, classifies 429/5xx/timeouts as retryable and 400/401/bad dimensions as permanent; provider chosen by configuration; the OpenAI provider requires a key |
+| `test_documents.py` | 18 | Upload is queued, the worker makes it ready with 1,536-dim embeddings and a generated `tsvector`; PDF and DOCX end to end with page ranges; invalid files leave **nothing stored**; size limit; **duplicate detection** (and not across organizations); employees can read but not upload or delete; **`min_role` hides documents** from lower roles (404 on read, chunks and download); managers can't restrict above their own role; a duplicate of a hidden document doesn't leak its ID; **other organizations get 404 on every endpoint**; super admin has no document access; download returns the original bytes as an attachment with `nosniff`; new versions replace chunks and keep old files downloadable; versions must keep the file type; managers manage only their own uploads; delete removes rows and files and is audited; list filters, search (LIKE wildcards escaped), counts and paging |
+| `test_ingestion_worker.py` | 13 | **Retryable errors retried** with exponential backoff, then succeed; documents fail after max attempts; permanent errors fail immediately; unparseable files fail with a reason and can be **reprocessed**; missing files fail permanently; a **crashed worker's job is reclaimed** after the lock timeout, and a job that keeps crashing workers is given up; **3 concurrent workers never claim the same job**; a job for an outdated version is **superseded**, as are queued jobs when a new version arrives; reprocessing is idempotent; worker heartbeat health check |
+| `test_rate_limit.py` | 6 | Repeated failed logins **lock the account temporarily** (even the right password gets 429 with `Retry-After`), other accounts unaffected; successful logins don't count; per-IP login and sign-up limits; **Redis down → requests still allowed** and readiness stays ok with Redis reported as a non-critical error |
 
 Lint (`ruff check`, `ruff format --check`) clean. `pip-audit`: no known vulnerabilities.
 
-### Frontend: 14 passed
+### Frontend: 23 passed
 
 Plus `tsc` type check, production build, and `npm audit` (production dependencies) clean.
 
 | File | Tests | What it proves |
 |---|---|---|
 | `auth.test.tsx` | 6 | Signed-out visitors are sent to login; login shows the dashboard and sends the token as a Bearer header; server error messages are shown; a session resumes from the refresh cookie; an expired access token is **refreshed once and the request retried**; sign-out |
-| `pages.test.tsx` | 8 | Dashboard health states; **role-based navigation** (admin sees Users and Audit Logs, an employee doesn't and is redirected from direct visits); admins can add users and can't edit their own role; managers get a read-only user list; audit log entries render with readable change details |
+| `pages.test.tsx` | 9 | Dashboard health states; **role-based navigation** (admin sees Users and Audit Logs, an employee doesn't and is redirected from direct visits); admins can add users and can't edit their own role; managers get a read-only user list; audit log entries render with readable change details; Redis shown as an optional dependency |
+| `documents.test.tsx` | 8 | Document list with status, visibility, failure reasons and status counts; upload sends **multipart form data** with title and visibility (managers can't pick "admins only"); rejected uploads show the API's reason and link to the duplicate; employees get no upload form; detail page shows facts, versions and chunks with page numbers; uploader can reprocess a failed document; delete needs confirmation; hidden/foreign documents show "not found" |
 
-### Browser end-to-end (Playwright against live servers)
+### Phase 3 end-to-end (live API + worker + Redis + PostgreSQL)
+
+- `scripts/smoke_test.py` against a running API and worker: registered an org, uploaded a Markdown file, the worker processed it into chunks (`ok: worker processed the document into 1 chunk(s)`). The same script runs in CI against the Docker stack.
+- `/health/ready` reported database and Redis healthy; `python -m app.worker --healthcheck` passed.
+- Playwright in Chromium through the Vite dev server: registered "Globex Industries", uploaded a 3-page PDF handbook (**Ready**, chunk shows "Pages 1–3"), a Markdown file restricted to managers (**Ready**), and a fake PDF (**Failed**: "The PDF is corrupt or unreadable"); re-uploading the handbook showed **"This file has already been uploaded"**; uploading a new version moved the document to **v2** and the chunks showed the new text. No browser errors.
+
+Screenshots: `docs/screenshots/documents.png`, `document-detail.png`, `dashboard.png`.
+
+### Phase 2 browser end-to-end (Playwright against live servers)
 
 Run against uvicorn, the Vite dev server and PostgreSQL 16 with a fresh database:
 

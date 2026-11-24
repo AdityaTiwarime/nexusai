@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.conftest import TEST_DATABASE_URL, run_alembic
 
-HEAD = "0002"
+HEAD = "0003"
 
 
 async def _current_revision() -> str | None:
@@ -34,6 +34,7 @@ async def test_upgrade_to_head_and_downgrade_to_base():
     assert up.returncode == 0, up.stderr
     assert await _current_revision() == HEAD
     assert await _table_exists("users")
+    assert await _table_exists("document_chunks")
 
     down = run_alembic("downgrade", "base")
     assert down.returncode == 0, down.stderr

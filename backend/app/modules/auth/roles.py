@@ -17,3 +17,14 @@ class Role(StrEnum):
 
 
 ORG_ROLES: frozenset[Role] = frozenset({Role.ORG_ADMIN, Role.MANAGER, Role.EMPLOYEE})
+
+# Seniority inside an organization. Used for "who may see this document" checks.
+ROLE_RANK: dict[str, int] = {
+    Role.EMPLOYEE.value: 1,
+    Role.MANAGER.value: 2,
+    Role.ORG_ADMIN.value: 3,
+}
+
+
+def rank(role: str) -> int:
+    return ROLE_RANK.get(role, 0)

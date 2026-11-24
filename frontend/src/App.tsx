@@ -5,6 +5,8 @@ import { RequireAuth } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DocumentDetailPage } from "./pages/DocumentDetailPage";
+import { DocumentsPage } from "./pages/DocumentsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { RegisterPage } from "./pages/RegisterPage";
@@ -19,6 +21,10 @@ export function App() {
         <Route element={<RequireAuth />}>
           <Route element={<Layout />}>
             <Route index element={<DashboardPage />} />
+            <Route element={<RequireAuth roles={["org_admin", "manager", "employee"]} />}>
+              <Route path="documents" element={<DocumentsPage />} />
+              <Route path="documents/:id" element={<DocumentDetailPage />} />
+            </Route>
             <Route element={<RequireAuth roles={["org_admin", "manager"]} />}>
               <Route path="users" element={<UsersPage />} />
             </Route>

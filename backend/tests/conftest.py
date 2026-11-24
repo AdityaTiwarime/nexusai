@@ -15,6 +15,7 @@ import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
@@ -32,7 +33,17 @@ TEST_DATABASE_URL = os.environ.get(
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 API = "/api/v1"
 PASSWORD = "Correct-Horse-Battery-9"
-TABLES = ["audit_logs", "refresh_tokens", "users", "organizations"]
+TEST_REDIS_URL = os.environ.get("NEXUS_TEST_REDIS_URL", "redis://localhost:6379/15")
+TABLES = [
+    "ingestion_jobs",
+    "document_chunks",
+    "document_versions",
+    "documents",
+    "audit_logs",
+    "refresh_tokens",
+    "users",
+    "organizations",
+]
 
 
 def make_settings(**overrides: object) -> Settings:
@@ -41,6 +52,9 @@ def make_settings(**overrides: object) -> Settings:
         "database_url": TEST_DATABASE_URL,
         "log_json": False,
         "log_level": "WARNING",
+        # Off by default so tests don't need Redis or trip limits; test_rate_limit.py turns it on.
+        "rate_limit_enabled": False,
+        "redis_url": TEST_REDIS_URL,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -78,8 +92,8 @@ async def clean_tables() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def settings() -> Settings:
-    return make_settings()
+def settings(tmp_path: Path) -> Settings:
+    return make_settings(storage_dir=str(tmp_path / "uploads"))
 
 
 async def _client_for(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
@@ -157,3 +171,48 @@ async def add_user(
     )
     assert response.status_code == 201, response.text
     return await login(client, email)
+
+
+# --- documents helpers -------------------------------------------------------------
+
+
+@pytest.fixture
+async def ingestor(settings: Settings) -> AsyncIterator["Ingestor"]:
+    """A worker bound to the same database and storage directory as `client`."""
+    from app.db.session import Database
+    from app.llm.embeddings import HashingEmbedder
+    from app.modules.documents.storage import LocalStorage
+    from app.worker.ingestion import Ingestor
+
+    db = Database(settings)
+    yield Ingestor(
+        db.session_factory, LocalStorage(settings.storage_dir), HashingEmbedder(), settings, "test"
+    )
+    await db.dispose()
+
+
+async def drain(ingestor: "Ingestor", limit: int = 50) -> int:
+    """Run jobs until the queue is empty; returns how many ran."""
+    ran = 0
+    while ran < limit and await ingestor.run_once():
+        ran += 1
+    return ran
+
+
+async def upload(
+    client: httpx.AsyncClient,
+    account: Account,
+    filename: str = "handbook.txt",
+    data: bytes = b"Employees may work from home on Fridays.",
+    **form: str,
+) -> httpx.Response:
+    return await client.post(
+        f"{API}/documents",
+        headers=bearer(account.token),
+        files={"file": (filename, data, "application/octet-stream")},
+        data=form,
+    )
+
+
+if TYPE_CHECKING:
+    from app.worker.ingestion import Ingestor
