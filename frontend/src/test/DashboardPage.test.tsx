@@ -26,7 +26,7 @@ function renderApp(path = "/") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter initialEntries={[path]}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
