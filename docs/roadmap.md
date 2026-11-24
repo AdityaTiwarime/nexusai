@@ -101,7 +101,7 @@ All business tables carry `organization_id` (tenant key) and are queried through
 | document_versions | id, document_id, version, storage_key, sha256 (unique per org), size | Phase 3 ✅ |
 | document_chunks | id, document_id, version_id, organization_id, chunk_index, content, pages, tsv (tsvector), embedding (vector) | Phase 3 ✅ |
 | ingestion_jobs | id, document_id, version_id, status, attempts, run_after, locked_at | Phase 3 ✅ |
-| conversations / messages | id, organization_id, user_id; message role, content, citations JSONB | Phase 4 |
+| conversations / messages | id, organization_id, user_id; message role, content, status, citations JSONB, model, tokens, latency | Phase 4 ✅ |
 | agent_definitions / tool_definitions | name, description, allowed_roles, is_mutating | Phase 5 |
 | agent_executions / workflow_runs | id, state, plan JSONB, steps JSONB, started/finished timestamps | Phase 5 |
 | approval_requests | id, workflow_run_id, action JSONB, status, requested_by, decided_by, expires_at | Phase 5 |
@@ -189,8 +189,13 @@ On your machine:
 | Background worker (PostgreSQL queue, retries with backoff, crash recovery, superseded jobs) | ✅ Implemented (Phase 3) |
 | Documents UI (upload, status, versions, chunks, reprocess, delete) | ✅ Implemented (Phase 3) |
 | OCR for scanned PDFs, malware scanning | ⏳ Not planned yet / Phase 10 |
+| Hybrid search (pgvector + full-text, RRF fusion, permission filtering in SQL, heuristic reranking) | ✅ Implemented (Phase 4) |
+| AI Chat with citations, "no evidence" answers, private conversations, follow-ups | ✅ Implemented (Phase 4) |
+| Answer providers: offline extractive (default) and OpenAI-compatible LLM | ✅ Implemented (Phase 4). LLM tested against a mocked API only; answer quality with a real model not yet measured |
+| RAG benchmark (retrieval hit@k, cited-answer accuracy, refusals) | ✅ Implemented (Phase 4); results in `docs/ai-design.md` |
+| Streaming answers, cross-encoder reranking, query rewriting for follow-ups | ⏳ Possible improvements |
 | Email verification, password reset, SSO/MFA | ⏳ Planned (Phase 6) |
-| Everything else | ⏳ Planned (Phases 4–10) |
+| Everything else | ⏳ Planned (Phases 5–10) |
 
 ## 9. Feature verification matrix
 
@@ -201,7 +206,7 @@ Filled in only from real test runs and evidence. See `docs/testing.md`.
 | Health checks + DB connectivity | Yes | Yes | `backend/tests/test_health.py` |
 | Migrations apply cleanly | Yes | Yes | `backend/tests/test_migrations.py` |
 | Frontend status page | Yes | Yes | `frontend/src/test/` |
-| RAG pipeline | No | No | — |
+| RAG pipeline (retrieval, citations, no-evidence, permissions) | Yes | Yes | `backend/tests/test_rag.py`, `test_answering.py`, `test_rag_eval.py`, `frontend/src/test/chat.test.tsx` |
 | Agent orchestration | No | No | — |
 | Authentication (JWT + refresh rotation) | Yes | Yes | `backend/tests/test_auth.py`, `frontend/src/test/auth.test.tsx` |
 | RBAC / tenant isolation | Yes | Yes | `backend/tests/test_rbac_and_tenancy.py` |

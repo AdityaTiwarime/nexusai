@@ -63,7 +63,7 @@ export function signedInRoutes(role: Role = "org_admin"): Routes {
       status: "ok",
       checks: { database: { status: "ok", latency_ms: 1.5, error: null } },
     }),
-    "GET /system/info": jsonResponse({ name: "NexusAI", version: "0.2.0", environment: "local" }),
+    "GET /system/info": jsonResponse({ name: "NexusAI", version: "0.4.0", environment: "local", answer_provider: "extractive", chat_model: null }),
   };
 }
 

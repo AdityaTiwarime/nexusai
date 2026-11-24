@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api, ApiError, type DocRole, type DocumentDetail } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
@@ -147,7 +147,10 @@ function Actions({ doc }: { doc: DocumentDetail }) {
 }
 
 function Chunks({ doc }: { doc: DocumentDetail }) {
-  const [page, setPage] = useState(0);
+  // ?chunk=N (from a chat citation or search result) opens the page holding that chunk.
+  const [params] = useSearchParams();
+  const target = params.get("chunk") === null ? null : Number(params.get("chunk"));
+  const [page, setPage] = useState(target !== null && target >= 0 ? Math.floor(target / CHUNK_PAGE) : 0);
   const chunks = useQuery({
     queryKey: ["document-chunks", doc.id, doc.processed_at, page],
     queryFn: () => api.documentChunks(doc.id, { limit: CHUNK_PAGE, offset: page * CHUNK_PAGE }),
@@ -156,6 +159,12 @@ function Chunks({ doc }: { doc: DocumentDetail }) {
   });
   const total = chunks.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / CHUNK_PAGE));
+  const loaded = chunks.data !== undefined;
+  useEffect(() => {
+    if (loaded && target !== null) {
+      document.getElementById(`chunk-${target}`)?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }
+  }, [loaded, target]);
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -175,7 +184,14 @@ function Chunks({ doc }: { doc: DocumentDetail }) {
         <>
           <ol className="mt-4 space-y-3">
             {chunks.data.items.map((chunk) => (
-              <li key={chunk.chunk_index} className="rounded-lg bg-slate-50 p-3 ring-1 ring-inset ring-slate-200">
+              <li
+                key={chunk.chunk_index}
+                id={`chunk-${chunk.chunk_index}`}
+                aria-current={chunk.chunk_index === target ? "true" : undefined}
+                className={`rounded-lg p-3 ring-inset ${
+                  chunk.chunk_index === target ? "bg-amber-50 ring-2 ring-amber-400" : "bg-slate-50 ring-1 ring-slate-200"
+                }`}
+              >
                 <div className="mb-1.5 flex gap-3 text-xs text-slate-500">
                   <span className="font-medium">#{chunk.chunk_index + 1}</span>
                   {pages(chunk.page_start, chunk.page_end) && <span>{pages(chunk.page_start, chunk.page_end)}</span>}
@@ -204,26 +220,26 @@ function Chunks({ doc }: { doc: DocumentDetail }) {
 
 export function DocumentDetailPage() {
   const { id = "" } = useParams();
-  const document = useQuery({
+  const docQuery = useQuery({
     queryKey: ["document", id],
     queryFn: () => api.getDocument(id),
     refetchInterval: (query) => (query.state.data && isInProgress(query.state.data.status) ? POLL_MS : false),
   });
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  if (document.isPending) return <p className="text-sm text-slate-500">Loading…</p>;
-  if (document.isError) {
-    const notFound = document.error instanceof ApiError && document.error.status === 404;
+  if (docQuery.isPending) return <p className="text-sm text-slate-500">Loading…</p>;
+  if (docQuery.isError) {
+    const notFound = docQuery.error instanceof ApiError && docQuery.error.status === 404;
     return (
       <div className="mx-auto max-w-3xl space-y-3">
-        <ErrorAlert message={notFound ? "Document not found, or you don't have access to it." : errorText(document.error)} />
+        <ErrorAlert message={notFound ? "Document not found, or you don't have access to it." : errorText(docQuery.error)} />
         <Link to="/documents" className="text-sm text-brand-700 hover:underline">
           ← Back to documents
         </Link>
       </div>
     );
   }
-  const doc = document.data;
+  const doc = docQuery.data;
   const characters = typeof doc.metadata.characters === "number" ? doc.metadata.characters : null;
 
   return (

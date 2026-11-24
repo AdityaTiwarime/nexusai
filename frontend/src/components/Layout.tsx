@@ -16,9 +16,9 @@ interface NavItem {
 // users who can't use them (the API enforces the same rules).
 const NAV: NavItem[] = [
   { label: "Dashboard", to: "/" },
-  { label: "AI Chat", phase: 4 },
+  { label: "AI Chat", to: "/chat", roles: ["org_admin", "manager", "employee"] },
   { label: "Documents", to: "/documents", roles: ["org_admin", "manager", "employee"] },
-  { label: "Search", phase: 4 },
+  { label: "Search", to: "/search", roles: ["org_admin", "manager", "employee"] },
   { label: "Agent Workflows", phase: 5 },
   { label: "Approvals", phase: 5 },
   { label: "Integrations", phase: 6 },

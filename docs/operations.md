@@ -52,6 +52,10 @@ WHERE status = 'running' AND locked_at < now() - interval '5 minutes';
 | Documents stay **Queued** | Worker not running | `docker compose ps worker`, `docker compose logs worker` |
 | Document **Failed**: "No text could be extracted" | Scanned PDF (image only) | OCR isn't supported yet; upload a text-based PDF |
 | Document **Failed**: "Embedding failed" | Provider down, out of retries, or bad API key | Check `last_error` (query above), fix, then click **Reprocess** |
+| Chat always answers "I couldn't find this" | Offline mode only answers questions worded close to the documents, or the documents aren't **Ready** | Rephrase with the documents' words, check **Documents**, or switch to `NEXUS_ANSWER_PROVIDER=openai` |
+| Chat returns **503** "AI service temporarily unavailable" | LLM provider timeout, 429 or outage | Retry; check the provider status and the API logs |
+| Chat returns **502** | LLM provider rejected the request (often a bad API key or model name) | Check `NEXUS_OPENAI_API_KEY` and `NEXUS_CHAT_MODEL` |
+| Search quality dropped after changing `NEXUS_EMBEDDING_PROVIDER` | Old chunks were embedded by the previous model | **Reprocess** each document |
 | Login returns **429** | Too many attempts (per IP per minute, or failed logins per account per 15 min) | Wait for `Retry-After` seconds |
 | Upload returns **413** from nginx | File over 25 MB | Limit is `NEXUS_MAX_UPLOAD_MB` (20) at the API; nginx allows slightly more so the API's clearer message is shown |
 

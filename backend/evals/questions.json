@@ -1,0 +1,164 @@
+{
+  "answerable": [
+    {
+      "q": "How many days of paid leave do employees get per year?",
+      "doc": "employee-handbook",
+      "expect": "24 days"
+    },
+    {
+      "q": "How many unused leave days can be carried over?",
+      "doc": "employee-handbook",
+      "expect": "5 days"
+    },
+    {
+      "q": "How long is parental leave for the primary caregiver?",
+      "doc": "employee-handbook",
+      "expect": "26 weeks"
+    },
+    {
+      "q": "What are the core working hours?",
+      "doc": "employee-handbook",
+      "expect": "10:00 to 16:00"
+    },
+    {
+      "q": "How many days per week can I work from home?",
+      "doc": "employee-handbook",
+      "expect": "two days"
+    },
+    {
+      "q": "What is the notice period after probation?",
+      "doc": "employee-handbook",
+      "expect": "60 days"
+    },
+    {
+      "q": "How long must passwords be?",
+      "doc": "it-security-policy",
+      "expect": "14 characters"
+    },
+    {
+      "q": "How often are passwords rotated?",
+      "doc": "it-security-policy",
+      "expect": "180 days"
+    },
+    {
+      "q": "Within how many hours must a lost laptop be reported?",
+      "doc": "it-security-policy",
+      "expect": "2 hours"
+    },
+    {
+      "q": "Are personal USB storage devices allowed on company laptops?",
+      "doc": "it-security-policy",
+      "expect": "blocked"
+    },
+    {
+      "q": "Is train travel preferred for short trips?",
+      "doc": "travel-and-expenses",
+      "expect": "four hours"
+    },
+    {
+      "q": "Within how many days must expense claims be submitted?",
+      "doc": "travel-and-expenses",
+      "expect": "30 days"
+    },
+    {
+      "q": "What is the daily meal allowance on business trips?",
+      "doc": "travel-and-expenses",
+      "expect": "1,500 rupees"
+    },
+    {
+      "q": "Which expenses need approval from a department head?",
+      "doc": "travel-and-expenses",
+      "expect": "25,000 rupees"
+    },
+    {
+      "q": "How many users does the Starter plan support?",
+      "doc": "product-faq",
+      "expect": "5 users"
+    },
+    {
+      "q": "How long is raw event data retention?",
+      "doc": "product-faq",
+      "expect": "13 months"
+    },
+    {
+      "q": "What is the first response time for critical incidents?",
+      "doc": "product-faq",
+      "expect": "30 minutes"
+    },
+    {
+      "q": "Which formats can customers export data in?",
+      "doc": "product-faq",
+      "expect": "Parquet"
+    },
+    {
+      "q": "When is the main branch deployed to production?",
+      "doc": "onboarding-guide",
+      "expect": "14:00"
+    },
+    {
+      "q": "How quickly must on-call engineers acknowledge pages?",
+      "doc": "onboarding-guide",
+      "expect": "15 minutes"
+    },
+    {
+      "q": "When do engineers join the on-call rotation?",
+      "doc": "onboarding-guide",
+      "expect": "3 months"
+    },
+    {
+      "q": "How many approving reviews does a pull request need?",
+      "doc": "onboarding-guide",
+      "expect": "one approving review"
+    }
+  ],
+  "unanswerable": [
+    "What is the refund policy for enterprise customers?",
+    "Who is the CEO of Globex?",
+    "What is the stock price today?",
+    "How do I book a meeting room in the Pune office?",
+    "What is the dress code for client visits?",
+    "Which health insurance provider does Globex use?"
+  ],
+  "paraphrased": [
+    {
+      "q": "How much vacation time do I get annually?",
+      "doc": "employee-handbook",
+      "expect": "24 days"
+    },
+    {
+      "q": "When do I need a medical certificate for being unwell?",
+      "doc": "employee-handbook",
+      "expect": "3 consecutive sick days"
+    },
+    {
+      "q": "What's the minimum password length?",
+      "doc": "it-security-policy",
+      "expect": "14 characters"
+    },
+    {
+      "q": "Can I plug in my own pen drive at work?",
+      "doc": "it-security-policy",
+      "expect": "blocked"
+    },
+    {
+      "q": "Can I fly business class?",
+      "doc": "travel-and-expenses",
+      "expect": "economy"
+    },
+    {
+      "q": "What's the cap on hotel costs in big cities?",
+      "doc": "travel-and-expenses",
+      "expect": "6,000 rupees"
+    },
+    {
+      "q": "Do enterprise clients get SSO?",
+      "doc": "product-faq",
+      "expect": "single sign-on"
+    },
+    {
+      "q": "What time do releases go out?",
+      "doc": "onboarding-guide",
+      "expect": "14:00"
+    }
+  ]
+}

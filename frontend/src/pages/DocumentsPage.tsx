@@ -32,11 +32,14 @@ function UploadForm() {
   const [minRole, setMinRole] = useState<DocRole>("employee");
 
   const upload = useMutation({
-    mutationFn: () => api.uploadDocument(file as File, { title: title || undefined, min_role: minRole }),
-    onSuccess: () => {
-      setFile(null);
-      setTitle("");
-      if (fileInput.current) fileInput.current.value = "";
+    mutationFn: (selected: File) => api.uploadDocument(selected, { title: title || undefined, min_role: minRole }),
+    onSuccess: (_, uploaded) => {
+      // Only clear the form if the user hasn't already picked the next file meanwhile.
+      setFile((current) => (current === uploaded ? null : current));
+      if (fileInput.current?.files?.[0] === uploaded) {
+        fileInput.current.value = "";
+        setTitle("");
+      }
       queryClient.invalidateQueries({ queryKey: ["documents"] });
     },
   });
@@ -51,7 +54,7 @@ function UploadForm() {
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (file) upload.mutate();
+        if (file) upload.mutate(file);
       }}
       className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
     >

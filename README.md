@@ -4,10 +4,12 @@
 
 **Enterprise Intelligence & Autonomous Workflow Platform.** A portfolio implementation of the kind of system a Forward Deployed Engineer builds: it connects scattered company knowledge, business applications and workflows into one secure, AI-powered platform with cited answers, approval-gated AI agents and full observability.
 
-> **Status: Phases 1–3 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
+> **Status: Phases 1–4 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence; RAG engine and AI Chat). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
 
-| Documents | Document detail |
+| AI Chat with citations | Hybrid search |
 |---|---|
+| ![AI Chat](docs/screenshots/chat.png) | ![Search](docs/screenshots/search.png) |
+| **Documents** | **Document detail** |
 | ![Documents](docs/screenshots/documents.png) | ![Document detail](docs/screenshots/document-detail.png) |
 | **User management** | **Audit log** |
 | ![Users](docs/screenshots/users.png) | ![Audit logs](docs/screenshots/audit-logs.png) |
@@ -25,6 +27,16 @@ A 5,000-person company keeps knowledge in documents, a CRM, a ticketing system a
 All data is synthetic. No real customer data or credentials are used.
 
 ## What works today
+
+**Phase 4: RAG engine and AI Chat**
+
+- **Ask questions in plain language** and get answers with **numbered citations**. Each citation links to the exact passage in the document, highlighted.
+- **"I couldn't find this" instead of guessing.** When the documents don't support an answer, NexusAI says so. In LLM mode, an answer with no valid citation is rejected in code, not just in the prompt.
+- **Hybrid retrieval**: pgvector similarity search plus PostgreSQL full-text search, merged with Reciprocal Rank Fusion and re-ranked.
+- **Permissions inside the search query**: answers only ever use documents the asker is allowed to open. If a document is later restricted or deleted, old citations to it are hidden.
+- **Two answer modes**: an offline mode that quotes the documents (default, no API key needed) and an OpenAI-compatible LLM mode with prompt-injection guards, token tracking and clear errors when the provider is down.
+- **Private conversations** with follow-up questions, plus a **Search** page showing ranked passages with highlights.
+- **Measured, not claimed**: a small benchmark runs in CI. Offline mode scores 22/22 on questions worded like the documents and refuses 6/6 unanswerable ones, but answers 0/8 paraphrased questions. It refuses those rather than answering wrongly. Full results and caveats: [`docs/ai-design.md`](docs/ai-design.md#evaluation).
 
 **Phase 3: document intelligence**
 
@@ -56,7 +68,7 @@ All data is synthetic. No real customer data or credentials are used.
 - **React + TypeScript dashboard** (Vite, Tailwind, React Router, TanStack Query) showing live system status, with the navigation for all upcoming modules.
 - **Docker Compose** for PostgreSQL (pgvector image), backend and frontend (nginx), with health-checked startup ordering.
 - **GitHub Actions CI**: lint, backend tests against real PostgreSQL, frontend type check/tests/build, dependency audits, and a full Docker stack health check.
-- **Tests** (all phases): 131 backend + 23 frontend, all passing, plus browser end-to-end runs and a CI smoke test that uploads a document through the Docker stack. Details in [`docs/testing.md`](docs/testing.md).
+- **Tests** (all phases): 173 backend + 31 frontend, all passing, plus browser end-to-end runs and a CI smoke test that uploads a document and asks questions through the Docker stack. Details in [`docs/testing.md`](docs/testing.md).
 
 ## Architecture
 
@@ -69,17 +81,18 @@ flowchart LR
     WORKER[Ingestion worker] -->|claims jobs| PG
     WORKER --> FILES
     WORKER --> EMB[Embedding provider]
-    API -. later .-> KAFKA[(Kafka)] & LLM[LLM providers]
+    API --> ANS[Answer provider<br/>extractive or LLM]
+    API -. later .-> KAFKA[(Kafka)]
 ```
 
 Full diagrams, component responsibilities and design decisions: [`docs/architecture.md`](docs/architecture.md).
 
 ## Tech stack
 
-| Layer | Now (Phase 3) | Planned |
+| Layer | Now (Phase 4) | Planned |
 |---|---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, React Router, TanStack Query | — |
-| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx; background worker | LangGraph, LangChain |
+| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx; background worker; hybrid RAG with an OpenAI-compatible LLM client | LangGraph |
 | Data | PostgreSQL 16 + pgvector, Redis | Kafka |
 | Infra | Docker, Docker Compose, GitHub Actions | AWS, Terraform (if deployed) |
 | Observability | Structured logs, request IDs | OpenTelemetry, Prometheus, Grafana |
@@ -98,7 +111,8 @@ docker compose up --build
 
 Then open:
 
-- App: http://localhost:5173 (click **Create an organization** to get started, then open **Documents**)
+- App: http://localhost:5173 (click **Create an organization**, upload files in **Documents**, then ask questions in **AI Chat**)
+- Optional: set `NEXUS_OPENAI_API_KEY` and `NEXUS_ANSWER_PROVIDER=openai` (and `NEXUS_EMBEDDING_PROVIDER=openai`) in `.env` for LLM answers and semantic search. If you change the embedding provider, reprocess your documents.
 - API docs (Swagger): http://localhost:8000/docs
 - Readiness: http://localhost:8000/api/v1/health/ready
 
@@ -172,6 +186,11 @@ Interactive docs: http://localhost:8000/docs (disabled in production).
 | POST | `/api/v1/documents/{id}/reprocess` | uploader, org admin | Queue processing again |
 | PATCH | `/api/v1/documents/{id}` | uploader, org admin | Rename or change visibility |
 | DELETE | `/api/v1/documents/{id}` | uploader, org admin | Delete the document, its versions, chunks and files |
+| POST | `/api/v1/search` | org member | Hybrid search over visible documents (`query`, `limit`, optional `document_ids`) |
+| POST | `/api/v1/chat/ask` | org member | Ask a question (optionally in an existing conversation); answer with citations or "no evidence" |
+| GET | `/api/v1/conversations` | owner | Your conversations, most recent first |
+| GET | `/api/v1/conversations/{id}` | owner | Messages, with citations re-checked against current permissions |
+| PATCH / DELETE | `/api/v1/conversations/{id}` | owner | Rename / delete a conversation |
 
 **Creating the platform super admin** (there is deliberately no API for this):
 
@@ -189,7 +208,7 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 - [`docs/architecture.md`](docs/architecture.md): architecture diagrams and decisions
 - [`docs/security.md`](docs/security.md): authentication, RBAC, tenant isolation, threat model, known limitations
 - [`docs/database-design.md`](docs/database-design.md): ER diagram, constraints, indexes, design decisions
-- [`docs/ai-design.md`](docs/ai-design.md): ingestion pipeline, chunking, embedding providers, limitations
+- [`docs/ai-design.md`](docs/ai-design.md): ingestion, retrieval, answers with citations, prompt-injection handling, evaluation results, limitations
 - [`docs/operations.md`](docs/operations.md): services, worker, queries, troubleshooting
 - [`docs/testing.md`](docs/testing.md): test strategy and actual results
 

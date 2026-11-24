@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { DocumentDetail, DocumentSummary } from "../api/client";
@@ -181,6 +182,34 @@ describe("Document detail page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes, delete" }));
     await waitFor(() => expect(deleted).toBe(true));
     expect(await screen.findByRole("heading", { name: "Documents" })).toBeInTheDocument();
+  });
+
+  it("opens the chunk a citation points to and highlights it", async () => {
+    const many = {
+      items: Array.from({ length: 10 }, (_, i) => ({
+        chunk_index: 10 + i,
+        content: `Passage number ${10 + i}`,
+        page_start: null,
+        page_end: null,
+        char_count: 20,
+      })),
+      total: 25,
+      limit: 10,
+      offset: 10,
+    };
+    let requested = "";
+    mockApi({
+      ...signedInRoutes("employee"),
+      "GET /documents/d-1": jsonResponse(makeDoc({ chunk_count: 25 })),
+      "GET /documents/d-1/chunks": () => jsonResponse(many),
+    });
+    const spy = vi.spyOn(globalThis, "fetch");
+    renderApp("/documents/d-1?chunk=13");
+    const target = await screen.findByText("Passage number 13");
+    expect(target.closest("li")).toHaveAttribute("aria-current", "true");
+    requested = spy.mock.calls.map((c) => String(c[0])).find((u) => u.includes("/chunks")) ?? "";
+    expect(requested).toContain("offset=10");
+    expect(screen.getByText("2 / 3")).toBeInTheDocument();
   });
 
   it("treats a hidden or foreign document as not found", async () => {

@@ -1,7 +1,8 @@
 """End-to-end smoke test against a running stack (used by CI after `docker compose up`).
 
 Registers a new organization, uploads a document through the frontend's nginx
-proxy, waits for the worker to process it and checks that chunks were created.
+proxy, waits for the worker to process it, checks that chunks were created, and
+asks a question that must be answered with a citation, plus one that must not.
 Standard library only, so it runs on any machine with Python 3.
 
     python scripts/smoke_test.py [base_url]     # default http://localhost:5173
@@ -71,6 +72,17 @@ def main() -> None:
     assert status == 200 and chunks["total"] >= 1, chunks
     assert "Train travel" in chunks["items"][0]["content"]
     print(f"ok: worker processed the document into {chunks['total']} chunk(s)")
+
+    status, reply = call("POST", "/chat/ask", token, {"question": "Is train travel preferred for short trips?"})
+    assert status == 200, (status, reply)
+    answer = reply["answer"]
+    assert answer["status"] == "answered" and answer["citations"], answer
+    assert answer["citations"][0]["document_id"] == doc["id"], answer
+    print(f"ok: answered with a citation: {answer['content'][:80]}")
+
+    status, reply = call("POST", "/chat/ask", token, {"question": "Who is the CEO of the company?"})
+    assert status == 200 and reply["answer"]["status"] == "no_evidence", reply
+    print("ok: unanswerable question was refused instead of guessed")
 
 
 if __name__ == "__main__":

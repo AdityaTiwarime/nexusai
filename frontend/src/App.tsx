@@ -4,12 +4,14 @@ import { AuthProvider } from "./auth/AuthContext";
 import { RequireAuth } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
+import { ChatPage } from "./pages/ChatPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DocumentDetailPage } from "./pages/DocumentDetailPage";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { SearchPage } from "./pages/SearchPage";
 import { UsersPage } from "./pages/UsersPage";
 
 export function App() {
@@ -24,6 +26,9 @@ export function App() {
             <Route element={<RequireAuth roles={["org_admin", "manager", "employee"]} />}>
               <Route path="documents" element={<DocumentsPage />} />
               <Route path="documents/:id" element={<DocumentDetailPage />} />
+              <Route path="chat" element={<ChatPage />} />
+              <Route path="chat/:id" element={<ChatPage />} />
+              <Route path="search" element={<SearchPage />} />
             </Route>
             <Route element={<RequireAuth roles={["org_admin", "manager"]} />}>
               <Route path="users" element={<UsersPage />} />

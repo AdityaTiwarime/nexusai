@@ -110,6 +110,31 @@ sequenceDiagram
 
 Details: [`ai-design.md`](ai-design.md) (pipeline) and [`operations.md`](operations.md) (running the worker).
 
+## Question answering flow (Phase 4)
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant A as FastAPI
+    participant D as PostgreSQL
+    participant L as Answer provider
+
+    B->>A: POST /chat/ask {question, conversation_id?}
+    A->>A: per-user rate limit (Redis)
+    A->>A: embed the question
+    A->>D: vector search + keyword search<br/>(org, role and status filters inside SQL)
+    A->>A: fuse (RRF), evidence filter, rerank
+    alt no evidence
+        A->>A: "I couldn't find this", no model call
+    else evidence
+        A->>L: numbered sources + question (+ history)
+        L-->>A: answer with [n] citations
+        A->>A: drop invalid citations; no valid citation = no evidence
+    end
+    A->>D: save question + answer (citations, model, tokens, latency)
+    A-->>B: answer with clickable citations
+```
+
 ## Request flow (Phase 1)
 
 ```mermaid

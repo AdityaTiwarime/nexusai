@@ -50,3 +50,6 @@ async def test_system_info(client):
     assert body["name"] == "NexusAI"
     assert body["environment"] == "test"
     assert body["version"]
+    assert body["answer_provider"] == "extractive"
+    assert body["chat_model"] is None
+    assert body["embedding_provider"] == "hashing"

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from tests.conftest import TEST_DATABASE_URL, run_alembic
 
-HEAD = "0003"
+HEAD = "0004"
 
 
 async def _current_revision() -> str | None:

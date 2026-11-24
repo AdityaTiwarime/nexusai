@@ -15,11 +15,14 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.core.rate_limit import build_rate_limiter
 from app.db.session import Database
+from app.llm.embeddings import build_embedder
 from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
 from app.modules.documents.router import router as documents_router
 from app.modules.documents.storage import LocalStorage
 from app.modules.organizations.router import router as organizations_router
+from app.modules.rag.answer import build_answerer
+from app.modules.rag.router import router as rag_router
 from app.modules.users.router import router as users_router
 
 logger = logging.getLogger("nexusai")
@@ -35,11 +38,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.db = Database(settings)
         app.state.storage = LocalStorage(settings.storage_dir)
         app.state.rate_limiter = build_rate_limiter(settings.redis_url, settings.rate_limit_enabled)
+        app.state.embedder = build_embedder(settings)  # embeds search queries
+        app.state.answerer = build_answerer(settings)
         logger.info("startup", extra={"environment": settings.environment, "version": __version__})
         try:
             yield
         finally:
             await app.state.rate_limiter.aclose()
+            for client in (app.state.embedder, app.state.answerer):
+                if hasattr(client, "aclose"):
+                    await client.aclose()
             await app.state.db.dispose()
             logger.info("shutdown")
 
@@ -73,6 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         organizations_router,
         audit_router,
         documents_router,
+        rag_router,
     )
     for router in routers:
         app.include_router(router, prefix=settings.api_prefix)

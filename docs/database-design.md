@@ -2,7 +2,7 @@
 
 PostgreSQL 16 is the system of record. Schema changes are made only through Alembic migrations in `backend/alembic/versions/`, and a test (`alembic check`) fails if the ORM models drift from the migrations.
 
-## Current schema (Phases 2–3)
+## Current schema (Phases 2–4)
 
 ```mermaid
 erDiagram
@@ -15,6 +15,8 @@ erDiagram
     documents ||--o{ document_chunks : "split into"
     document_versions ||--o{ document_chunks : "produced"
     documents ||--o{ ingestion_jobs : "processed by"
+    users ||--o{ conversations : "owns"
+    conversations ||--o{ messages : "contains"
 
     organizations {
         uuid id PK
@@ -106,6 +108,26 @@ erDiagram
         varchar worker_id
         varchar last_error "internal"
     }
+    conversations {
+        uuid id PK
+        uuid organization_id FK
+        uuid user_id FK "only the owner can read it"
+        varchar title
+        timestamptz updated_at
+    }
+    messages {
+        uuid id PK
+        uuid conversation_id FK
+        uuid organization_id FK
+        varchar role "user/assistant"
+        text content
+        varchar status "answered/no_evidence"
+        jsonb citations "document, chunk, pages, snippet"
+        varchar model
+        int input_tokens
+        int output_tokens
+        int latency_ms
+    }
 ```
 
 ## Constraints
@@ -136,6 +158,8 @@ erDiagram
 | `document_chunks USING hnsw (embedding vector_cosine_ops)` | Approximate nearest-neighbour (semantic) search, Phase 4. |
 | `document_chunks USING gin (tsv)` | Full-text (keyword) search, Phase 4. |
 | `ingestion_jobs (status, run_after)` | The worker's "next runnable job" query. |
+| `conversations (user_id, updated_at)` | A user's chat list, most recent first. |
+| `messages (conversation_id, created_at)` | Loading one conversation in order. |
 
 **Tenant-first composite indexes** are the rule for every tenant-owned table: almost every query starts with `WHERE organization_id = :caller_org`.
 
@@ -154,7 +178,6 @@ erDiagram
 
 | Phase | Tables |
 |---|---|
-| 4 | `conversations`, `messages` (citations as JSONB) |
 | 5 | `agent_definitions`, `tool_definitions`, `agent_executions`, `workflow_runs`, `approval_requests` |
 | 6 | `integrations`, `integration_credentials` (encrypted at rest) |
 | 7 | `system_events` (unique idempotency key) |

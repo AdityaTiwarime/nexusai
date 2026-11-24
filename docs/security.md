@@ -91,6 +91,9 @@ API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses 
 | Account enumeration | Identical response and timing for unknown email vs. wrong password; 404 for foreign IDs. |
 | Leaking internals | Generic 500 responses with request ID only; readiness check exposes only the error type. |
 | Malicious uploads | Extension allow-list **and** content checks (magic bytes, DOCX structure, text decoding), size limit, DOCX zip-bomb guard. Files are stored under server-generated keys, never user file names (no path traversal). Downloads are always `application/octet-stream` + `Content-Disposition: attachment` + `nosniff`, so an uploaded file is never rendered by the browser. |
+| AI answers leaking restricted content | Retrieval filters by organization, role and status **inside the SQL query**, so restricted passages never reach the answer step (tested with an employee asking about an admin-only document). Old citations are re-checked on every read and hidden once a source is restricted or deleted. Conversations are private to their owner. |
+| Prompt injection through documents | Sources are wrapped in delimited blocks, attempts to close a block are neutralised, the system prompt treats sources as data, and output is validated in code (only real citations; an ungrounded answer becomes "no evidence"). The chat has no tools or actions, so an injection can at worst distort one answer. Not a complete defence; see `ai-design.md`. |
+| Abuse of the AI endpoint (cost) | Per-user rate limit on questions and searches; the model isn't called when nothing relevant was retrieved. |
 | Seeing restricted documents | Per-document `min_role`, applied in the SQL query; hidden documents return 404 like missing ones; duplicates of hidden documents don't reveal their ID (tested). |
 
 ## Known limitations (planned)

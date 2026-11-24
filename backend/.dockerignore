@@ -7,3 +7,4 @@ tests
 .env
 *.egg-info
 data
+evals

@@ -154,6 +154,9 @@ export interface SystemInfo {
   name: string;
   version: string;
   environment: string;
+  answer_provider?: "extractive" | "openai";
+  chat_model?: string | null;
+  embedding_provider?: string;
 }
 
 export interface TokenResponse {
@@ -283,6 +286,65 @@ export interface ChunkPage {
   offset: number;
 }
 
+export interface SearchResult {
+  document_id: string;
+  document_title: string;
+  chunk_index: number;
+  page_start: number | null;
+  page_end: number | null;
+  content: string;
+  score: number;
+  similarity: number;
+  keyword_match: boolean;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: SearchResult[];
+  candidates: number;
+}
+
+export interface Citation {
+  number: number;
+  available: boolean;
+  document_id: string | null;
+  document_title: string | null;
+  chunk_index: number | null;
+  page_start: number | null;
+  page_end: number | null;
+  snippet: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  status: "answered" | "no_evidence" | null;
+  citations: Citation[];
+  model: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  latency_ms: number | null;
+  created_at: string;
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: ChatMessage[];
+}
+
+export interface AskResponse {
+  conversation_id: string;
+  question: ChatMessage;
+  answer: ChatMessage;
+}
+
 // --- endpoints ---------------------------------------------------------------------
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -355,6 +417,18 @@ export const api = {
     request<ChunkPage>(
       `/documents/${id}/chunks?limit=${params.limit ?? 20}&offset=${params.offset ?? 0}`,
     ),
+  search: (query: string, limit = 10) => request<SearchResponse>("/search", json({ query, limit })),
+  ask: (question: string, conversationId?: string) =>
+    request<AskResponse>(
+      "/chat/ask",
+      json(conversationId ? { question, conversation_id: conversationId } : { question }),
+    ),
+  listConversations: () => request<Conversation[]>("/conversations"),
+  getConversation: (id: string) => request<ConversationDetail>(`/conversations/${id}`),
+  renameConversation: (id: string, title: string) =>
+    request<Conversation>(`/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  deleteConversation: (id: string) => request<void>(`/conversations/${id}`, { method: "DELETE" }),
+
   downloadDocument: (id: string, version: DocumentVersion) =>
     download(`/documents/${id}/download?version=${version.version}`, version.original_filename),
 };

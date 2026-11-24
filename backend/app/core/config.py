@@ -81,6 +81,19 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=64, ge=1, le=512)
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=300)
 
+    # --- Retrieval and answers (RAG) ---
+    # "extractive" = offline, no LLM: quotes the best-matching sentences from the sources.
+    # "openai" = an OpenAI-compatible chat model writes the answer from the sources.
+    answer_provider: Literal["extractive", "openai"] = "extractive"
+    chat_model: str = "gpt-4o-mini"
+    chat_timeout_seconds: float = Field(default=60, gt=0, le=300)
+    chat_max_output_tokens: int = Field(default=700, ge=50, le=4000)
+    retrieval_candidates: int = Field(default=30, ge=5, le=200)  # per search mode, before fusion
+    retrieval_top_k: int = Field(default=6, ge=1, le=20)  # passages given to the answer step
+    # Passages below this cosine similarity count as evidence only if they also match keywords.
+    retrieval_min_similarity: float = Field(default=0.3, ge=0, le=1)
+    chat_rate_limit_per_user: int = Field(default=30, ge=1)  # questions per minute
+
     # --- Background worker ---
     worker_poll_seconds: float = Field(default=1.0, gt=0, le=60)
     job_max_attempts: int = Field(default=3, ge=1, le=10)
@@ -93,10 +106,9 @@ class Settings(BaseSettings):
     def check_documents_and_embeddings(self) -> "Settings":
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
-        if self.embedding_provider == "openai" and not self.openai_api_key:
-            raise ValueError(
-                "NEXUS_OPENAI_API_KEY is required when NEXUS_EMBEDDING_PROVIDER=openai"
-            )
+        uses_openai = "openai" in (self.embedding_provider, self.answer_provider)
+        if uses_openai and not self.openai_api_key:
+            raise ValueError("NEXUS_OPENAI_API_KEY is required when an OpenAI provider is selected")
         return self
 
     @model_validator(mode="after")

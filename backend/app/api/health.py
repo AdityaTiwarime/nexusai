@@ -48,6 +48,10 @@ class SystemInfo(BaseModel):
     name: str
     version: str
     environment: str
+    # Lets the UI say how answers are produced (e.g. "offline, quotes your documents").
+    answer_provider: str
+    chat_model: str | None
+    embedding_provider: str
 
 
 @router.get("/health/live", response_model=LiveResponse)
@@ -99,4 +103,11 @@ async def _check_redis(limiter: RateLimiter) -> CheckResult:
 
 @router.get("/system/info", response_model=SystemInfo)
 async def system_info(settings: Annotated[Settings, Depends(get_settings_dep)]) -> SystemInfo:
-    return SystemInfo(name=settings.app_name, version=__version__, environment=settings.environment)
+    return SystemInfo(
+        name=settings.app_name,
+        version=__version__,
+        environment=settings.environment,
+        answer_provider=settings.answer_provider,
+        chat_model=settings.chat_model if settings.answer_provider == "openai" else None,
+        embedding_provider=settings.embedding_provider,
+    )
