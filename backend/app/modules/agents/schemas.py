@@ -82,6 +82,9 @@ class TicketOut(BaseModel):
     priority: str
     status: str
     customer_email: str | None
+    external_system: str | None
+    external_number: str | None
+    external_url: str | None
     agent_run_id: uuid.UUID | None
     created_at: datetime
 
@@ -94,5 +97,7 @@ class OutboxOut(BaseModel):
     subject: str
     body: str
     status: str
+    provider_message_id: str | None
+    sent_at: datetime | None
     agent_run_id: uuid.UUID | None
     created_at: datetime

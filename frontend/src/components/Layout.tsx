@@ -21,7 +21,7 @@ const NAV: NavItem[] = [
   { label: "Search", to: "/search", roles: ["org_admin", "manager", "employee"] },
   { label: "Agent Workflows", to: "/workflows", roles: ["org_admin", "manager", "employee"] },
   { label: "Approvals", to: "/approvals", roles: ["org_admin", "manager"] },
-  { label: "Integrations", phase: 6 },
+  { label: "Integrations", to: "/integrations", roles: ["org_admin", "manager"] },
   { label: "Users", to: "/users", roles: ["org_admin", "manager"] },
   { label: "Audit Logs", to: "/audit-logs", roles: ["org_admin"] },
   { label: "Observability", phase: 8 },

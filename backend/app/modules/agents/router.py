@@ -167,6 +167,7 @@ async def start_run(
             embedder=embedder,
             settings=settings,
             http_request=request,
+            integrations=request.app.state.integrations,
         )
     except (ChatError, EmbeddingError) as exc:
         await session.rollback()
@@ -220,6 +221,7 @@ async def retry_run(
             embedder=embedder,
             settings=settings,
             http_request=request,
+            integrations=request.app.state.integrations,
         )
     except (service.NotFound, service.Conflict) as exc:
         raise _http(exc) from None
@@ -277,6 +279,7 @@ async def _decide(
             embedder=embedder,
             settings=settings,
             http_request=request,
+            integrations=request.app.state.integrations,
         )
     except (service.NotFound, service.Forbidden, service.Conflict) as exc:
         raise _http(exc) from None

@@ -11,8 +11,11 @@ from typing import Annotated, Literal
 from pydantic import Field, PostgresDsn, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-# Only for local development and tests. Startup refuses it in staging/production.
+# Only for local development and tests. Startup refuses them in staging/production.
 DEV_JWT_SECRET = "dev-only-insecure-jwt-secret-change-me-0123456789"
+DEV_ENCRYPTION_KEY = (
+    "ZGV2LW9ubHktbmV4dXNhaS1lbmNyeXB0aW9uLWtleSE="  # Fernet key (base64 of 32 bytes)
+)
 
 
 class Settings(BaseSettings):
@@ -102,6 +105,21 @@ class Settings(BaseSettings):
     approval_ttl_hours: int = Field(default=24, ge=1, le=720)
     agent_rate_limit_per_user: int = Field(default=10, ge=1)  # new runs per minute
 
+    # --- Integrations (Phase 6) ---
+    # Encrypts connector credentials at rest. Generate one with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    encryption_key: SecretStr = SecretStr(DEV_ENCRYPTION_KEY)
+    # Connectors may only call these hosts (protects against SSRF through a configured URL).
+    integration_allowed_hosts: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["localhost", "127.0.0.1", "mock-services"]
+    )
+    integration_timeout_seconds: float = Field(default=10, gt=0, le=120)
+    integration_max_attempts: int = Field(default=3, ge=1, le=10)
+    integration_retry_base_seconds: float = Field(default=0.5, ge=0, le=30)
+    integration_max_retry_after_seconds: float = Field(default=10, ge=0, le=300)
+    # Base URL other systems use to reach this API (for webhook URLs).
+    public_api_url: str = "http://localhost:8000"
+
     # --- Background worker ---
     worker_poll_seconds: float = Field(default=1.0, gt=0, le=60)
     job_max_attempts: int = Field(default=3, ge=1, le=10)
@@ -131,6 +149,8 @@ class Settings(BaseSettings):
                 raise ValueError("Set NEXUS_JWT_SECRET to a random value of at least 32 characters")
             if not self.cookie_secure:
                 raise ValueError("NEXUS_COOKIE_SECURE must be true in staging/production")
+            if self.encryption_key.get_secret_value() == DEV_ENCRYPTION_KEY:
+                raise ValueError("Set NEXUS_ENCRYPTION_KEY to a generated Fernet key")
         return self
 
     @field_validator("database_url")
@@ -138,6 +158,26 @@ class Settings(BaseSettings):
     def require_async_driver(cls, value: PostgresDsn) -> PostgresDsn:
         if value.scheme != "postgresql+asyncpg":
             raise ValueError("database_url must use the 'postgresql+asyncpg' driver")
+        return value
+
+    @field_validator("integration_allowed_hosts", mode="before")
+    @classmethod
+    def split_hosts(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [h.strip().lower() for h in value.split(",") if h.strip()]
+        return value
+
+    @field_validator("encryption_key")
+    @classmethod
+    def valid_fernet_key(cls, value: SecretStr) -> SecretStr:
+        from cryptography.fernet import Fernet
+
+        try:
+            Fernet(value.get_secret_value().encode())
+        except (ValueError, TypeError):
+            raise ValueError(
+                "NEXUS_ENCRYPTION_KEY must be a Fernet key (32 url-safe base64 bytes)"
+            ) from None
         return value
 
     @field_validator("cors_origins", mode="before")

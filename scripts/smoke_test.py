@@ -11,6 +11,7 @@ Standard library only, so it runs on any machine with Python 3.
 """
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -18,6 +19,9 @@ import urllib.request
 import uuid
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5173").rstrip("/") + "/api/v1"
+# The mock services as seen by the backend container, and by this script.
+MOCK_FROM_BACKEND = os.environ.get("MOCK_URL_FROM_BACKEND", "http://mock-services:9000")
+MOCK_FROM_HERE = os.environ.get("MOCK_URL_FROM_HERE", "http://localhost:9000")
 
 
 def call(method: str, path: str, token: str | None = None, body=None, content_type=None):
@@ -104,6 +108,35 @@ def main() -> None:
     status, done = call("POST", f"/approvals/{run['approval']['id']}/approve", login["access_token"], {})
     assert status == 200 and done["status"] == "completed", done
     print(f"ok: agent run approved by a manager: {done['summary']}")
+
+    # Phase 6: connect the mock ServiceNow, Salesforce and email services.
+    for spec in (
+        {"kind": "servicenow", "name": "ServiceNow", "secrets": {"username": "nexus", "password": "servicenow-demo-password"}},
+        {"kind": "salesforce", "name": "Salesforce", "secrets": {"client_id": "nexus-client", "client_secret": "salesforce-demo-secret"}},
+        {"kind": "email", "name": "Mail", "config": {"sender": "support@example.com"}, "secrets": {"api_key": "email-demo-key"}},
+    ):  # fmt: skip
+        status, created = call("POST", "/integrations", token, {**spec, "base_url": MOCK_FROM_BACKEND})
+        assert status == 201 and created["health_status"] == "ok", (status, created)
+    print("ok: connected ServiceNow, Salesforce and email (health checks passed)")
+
+    status, run = call("POST", "/agents/runs", token, {
+        "request": "Customer jane@globex.com can't log in. Open a high priority ticket and email her."
+    })  # fmt: skip
+    status, done = call("POST", f"/approvals/{run['approval']['id']}/approve", login["access_token"], {})
+    assert status == 200 and done["status"] == "completed", done
+    assert "ServiceNow INC" in done["summary"] and "Sent an email" in done["summary"], done["summary"]
+    number = done["steps"][1]["result"]["external_number"]
+    print(f"ok: {done['summary']}")
+
+    with urllib.request.urlopen(
+        urllib.request.Request(f"{MOCK_FROM_HERE}/_mock/servicenow/incidents/{number}/resolve", method="POST"),
+        timeout=10,
+    ) as response:
+        deliveries = json.loads(response.read())["deliveries"]
+    assert deliveries and deliveries[0].get("status") == 200, deliveries
+    status, tickets = call("GET", "/tickets", token)
+    assert any(t["external_number"] == number and t["status"] == "resolved" for t in tickets), tickets
+    print(f"ok: resolving {number} in ServiceNow updated the ticket through a signed webhook")
 
 
 if __name__ == "__main__":

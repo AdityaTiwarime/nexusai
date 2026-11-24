@@ -22,6 +22,8 @@ from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
 from app.modules.documents.router import router as documents_router
 from app.modules.documents.storage import LocalStorage
+from app.modules.integrations.router import router as integrations_router
+from app.modules.integrations.runtime import IntegrationRuntime
 from app.modules.organizations.router import router as organizations_router
 from app.modules.rag.answer import build_answerer
 from app.modules.rag.router import router as rag_router
@@ -43,6 +45,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.embedder = build_embedder(settings)  # embeds search queries
         app.state.answerer = build_answerer(settings)
         app.state.planner = build_planner(settings)
+        app.state.integrations = IntegrationRuntime(settings, app.state.db.session_factory)
         logger.info("startup", extra={"environment": settings.environment, "version": __version__})
         try:
             yield
@@ -86,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         documents_router,
         rag_router,
         agents_router,
+        integrations_router,
     )
     for router in routers:
         app.include_router(router, prefix=settings.api_prefix)

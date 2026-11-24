@@ -58,8 +58,9 @@ async def _count(ingestor, model) -> int:
 
 async def test_rule_planner_understands_ticket_and_email_requests():
     steps = validate_plan(await RulePlanner().plan(TICKET_AND_EMAIL), 5)
-    assert [s.tool for s in steps] == ["create_ticket", "notify_customer"]
-    ticket, email = steps[0].args, steps[1].args
+    assert [s.tool for s in steps] == ["lookup_customer", "create_ticket", "notify_customer"]
+    assert steps[0].args == {"email": "jane@globex.com"}
+    ticket, email = steps[1].args, steps[2].args
     assert ticket["priority"] == "high"
     assert ticket["customer_email"] == "jane@globex.com"
     assert "jane@globex.com" not in ticket["title"]
@@ -72,7 +73,10 @@ async def test_rule_planner_understands_ticket_and_email_requests():
     [
         ("What is the travel policy for short trips?", ["search_documents"]),
         ("Log an issue about the broken printer, low priority", ["create_ticket"]),
-        ("Notify bob@example.com that his refund was processed", ["notify_customer"]),
+        (
+            "Notify bob@example.com that his refund was processed",
+            ["lookup_customer", "notify_customer"],
+        ),
         (
             "Check the security policy and raise a ticket about weak passwords",
             ["search_documents", "create_ticket"],
@@ -144,7 +148,7 @@ async def test_mutating_steps_wait_for_approval_and_nothing_happens_before(clien
     assert response.status_code == 201, response.text
     run = response.json()
     assert run["status"] == "awaiting_approval"
-    assert [s["status"] for s in run["steps"]] == ["awaiting_approval", "awaiting_approval"]
+    assert [s["status"] for s in run["steps"]] == ["done", "awaiting_approval", "awaiting_approval"]
     assert run["approval"]["status"] == "pending"
     assert run["summary"].endswith("2 actions waiting for approval.")
     assert await _count(ingestor, Ticket) == 0
@@ -168,7 +172,8 @@ async def test_approved_actions_execute_exactly_as_shown(client, ingestor):
     assert done["status"] == "completed"
     assert done["approval"]["status"] == "approved"
     assert done["approval"]["decided_by_email"] == "manager@acme.com"
-    ticket_step, email_step = done["steps"]
+    lookup_step, ticket_step, email_step = done["steps"]
+    assert lookup_step["result"]["found"] is False  # Salesforce isn't connected here
     assert ticket_step["result"]["ticket_number"] == "TCK-1001"
     assert ticket_step["result"]["verified"] is True
     assert email_step["result"]["status"] == "recorded" and email_step["result"]["verified"] is True
@@ -242,7 +247,7 @@ async def test_rejection_runs_nothing(client, ingestor):
     response = await _decide(client, manager, approval_id, "reject", "Customer already contacted")
     run = response.json()
     assert run["status"] == "rejected"
-    assert [s["status"] for s in run["steps"]] == ["rejected", "rejected"]
+    assert [s["status"] for s in run["steps"]] == ["done", "rejected", "rejected"]
     assert run["summary"] == "Rejected: Customer already contacted"
     assert run["approval"]["comment"] == "Customer already contacted"
     assert await _count(ingestor, Ticket) == 0
@@ -263,7 +268,7 @@ async def test_expired_requests_cannot_be_approved(client, ingestor):
         await client.get(f"{API}/agents/runs/{run['id']}", headers=bearer(employee.token))
     ).json()
     assert detail["status"] == "expired"
-    assert [s["status"] for s in detail["steps"]] == ["skipped", "skipped"]
+    assert [s["status"] for s in detail["steps"]] == ["done", "skipped", "skipped"]
     assert await _count(ingestor, Ticket) == 0
 
 
@@ -313,7 +318,7 @@ async def test_ticket_numbers_are_sequential_per_organization(client):
     other_manager = await add_user(client, other_admin, "mgr@other.com", "manager")
     approval_id = (await _start(client, other_admin)).json()["approval"]["id"]
     run = (await _decide(client, other_manager, approval_id)).json()
-    assert run["steps"][0]["result"]["ticket_number"] == "TCK-1001"
+    assert run["steps"][1]["result"]["ticket_number"] == "TCK-1001"
 
 
 async def test_failed_step_leaves_no_partial_write_and_retry_is_idempotent(
@@ -338,8 +343,8 @@ async def test_failed_step_leaves_no_partial_write_and_retry_is_idempotent(
     approval_id = (await _start(client, employee)).json()["approval"]["id"]
     run = (await _decide(client, manager, approval_id)).json()
     assert run["status"] == "failed"
-    assert [s["status"] for s in run["steps"]] == ["done", "failed"]
-    assert run["steps"][1]["error"] == "notify_customer failed: RuntimeError"
+    assert [s["status"] for s in run["steps"]] == ["done", "done", "failed"]
+    assert run["steps"][2]["error"] == "notify_customer failed: RuntimeError"
     assert await _count(ingestor, Ticket) == 1
     assert await _count(ingestor, OutboxMessage) == 0  # the failed step's write was rolled back
 

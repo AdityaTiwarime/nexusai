@@ -35,6 +35,9 @@ API = "/api/v1"
 PASSWORD = "Correct-Horse-Battery-9"
 TEST_REDIS_URL = os.environ.get("NEXUS_TEST_REDIS_URL", "redis://localhost:6379/15")
 TABLES = [
+    "webhook_events",
+    "integration_calls",
+    "integrations",
     "outbox_messages",
     "tickets",
     "approval_requests",

@@ -7,6 +7,7 @@ import { ApprovalsPage } from "./pages/ApprovalsPage";
 import { AuditLogsPage } from "./pages/AuditLogsPage";
 import { ChatPage } from "./pages/ChatPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { DocumentDetailPage } from "./pages/DocumentDetailPage";
 import { DocumentsPage } from "./pages/DocumentsPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -37,6 +38,7 @@ export function App() {
             <Route element={<RequireAuth roles={["org_admin", "manager"]} />}>
               <Route path="users" element={<UsersPage />} />
               <Route path="approvals" element={<ApprovalsPage />} />
+              <Route path="integrations" element={<IntegrationsPage />} />
             </Route>
             <Route element={<RequireAuth roles={["org_admin"]} />}>
               <Route path="audit-logs" element={<AuditLogsPage />} />

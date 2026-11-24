@@ -96,6 +96,10 @@ API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses 
 | An AI agent doing something harmful | Agents can only use 3 registered tools with strict schemas (no SQL, shell or arbitrary HTTP). Anything that creates or sends needs a human approval of the exact actions. Plans from any planner are validated and rejected as a whole if they use an unknown tool or extra arguments (tested with a model proposing `DROP TABLE`). |
 | Approving your own risky request | Separation of duties: the requester can never approve or reject their own run, whatever their role; employees can't approve at all. |
 | Double execution (double click, two approvers) | Conditional `UPDATE … WHERE status = 'pending'` decision, plus unique (run, step) constraints on every created record (tested concurrently). |
+| SSRF through a configured integration URL | Base URLs must be http(s), without credentials, on a host in `NEXUS_INTEGRATION_ALLOWED_HOSTS`; redirects aren't followed (tested with cloud metadata IPs, internal hosts, look-alike domains). |
+| Leaked integration credentials | Encrypted at rest (Fernet) with a key outside the database; never returned by the API; audit logs record which fields changed, never values; production refuses the dev key. |
+| Forged or replayed webhooks | HMAC-SHA256 over timestamp + raw body, constant-time compare, 5-minute window, unique event ids, 64 KB limit, per-integration rotatable secret (tested). |
+| Duplicate side effects in external systems | Idempotency keys per (run, step) on every external create; 4xx errors aren't retried. |
 | Abuse of the AI endpoint (cost) | Per-user rate limit on questions and searches; the model isn't called when nothing relevant was retrieved. |
 | Seeing restricted documents | Per-document `min_role`, applied in the SQL query; hidden documents return 404 like missing ones; duplicates of hidden documents don't reveal their ID (tested). |
 
@@ -104,7 +108,7 @@ API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses 
 | Limitation | Plan |
 |---|---|
 | No malware scanning of uploads | Add a ClamAV (or cloud) scan step in the worker before parsing (Phase 10). |
-| No email verification or password reset | Requires an email provider; planned with the integrations work (Phase 6). |
-| No MFA or SSO (OAuth2/OIDC) | OIDC sign-in is planned alongside the enterprise connectors (Phase 6). |
+| No email verification or password reset | Planned for Phase 10 (the email connector exists now, for agent emails). |
+| No MFA or SSO (OAuth2/OIDC) | Planned for Phase 10. |
 | Admin sets the first password for new users | Replace with invite links once email is available. |
 | HS256 shared secret | Sufficient for a single service; move to RS256 with key rotation if other services need to verify tokens. |

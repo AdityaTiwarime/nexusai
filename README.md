@@ -4,13 +4,15 @@
 
 **Enterprise Intelligence & Autonomous Workflow Platform.** A portfolio implementation of the kind of system a Forward Deployed Engineer builds: it connects scattered company knowledge, business applications and workflows into one secure, AI-powered platform with cited answers, approval-gated AI agents and full observability.
 
-> **Status: Phases 1–5 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence; RAG engine and AI Chat; AI agents with human approval). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
+> **Status: Phases 1–6 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence; RAG engine and AI Chat; AI agents with human approval; integrations). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
 
-| Approval: exactly what will run | Completed agent run |
+| Integrations: health and call log | Agent run across ServiceNow, Salesforce and email |
 |---|---|
-| ![Approvals](docs/screenshots/approvals.png) | ![Agent run](docs/screenshots/workflow-completed.png) |
-| **AI Chat with citations** | **Hybrid search** |
-| ![AI Chat](docs/screenshots/chat.png) | ![Search](docs/screenshots/search.png) |
+| ![Integrations](docs/screenshots/integrations.png) | ![Agent run](docs/screenshots/workflow-integrations.png) |
+| **Approval: exactly what will run** | **AI Chat with citations** |
+| ![Approvals](docs/screenshots/approvals.png) | ![AI Chat](docs/screenshots/chat.png) |
+| **Hybrid search** | **Completed agent run** |
+| ![Search](docs/screenshots/search.png) | ![Agent run](docs/screenshots/workflow-completed.png) |
 | **Documents** | **Document detail** |
 | ![Documents](docs/screenshots/documents.png) | ![Document detail](docs/screenshots/document-detail.png) |
 | **User management** | **Audit log** |
@@ -29,6 +31,14 @@ A 5,000-person company keeps knowledge in documents, a CRM, a ticketing system a
 All data is synthetic. No real customer data or credentials are used.
 
 ## What works today
+
+**Phase 6: integrations**
+
+- **Connectors for ServiceNow, Salesforce and email** (Microsoft Graph style), tested against bundled **mock services with synthetic data** that run as their own container. Approved agent actions now create real incidents in the mock ServiceNow, look up the customer in the mock Salesforce, and actually send the email.
+- **Built for unreliable systems**: timeouts, retries with exponential backoff and `Retry-After`, idempotency keys (a retry never creates a duplicate incident or email), and a per-call log with attempts and latency.
+- **Signed webhooks**: resolving an incident in ServiceNow updates the NexusAI ticket. Webhooks are verified with HMAC, protected against replays, de-duplicated, and their secret can be rotated.
+- **Security**: credentials encrypted at rest and never returned by the API; integration URLs restricted to an allowlist (SSRF protection).
+- **Integrations page**: connect with one click to the bundled mocks, test connections, and see health and recent calls. Details: [`docs/integrations-design.md`](docs/integrations-design.md).
 
 **Phase 5: AI agents with human approval**
 
@@ -79,7 +89,7 @@ All data is synthetic. No real customer data or credentials are used.
 - **React + TypeScript dashboard** (Vite, Tailwind, React Router, TanStack Query) showing live system status, with the navigation for all upcoming modules.
 - **Docker Compose** for PostgreSQL (pgvector image), backend and frontend (nginx), with health-checked startup ordering.
 - **GitHub Actions CI**: lint, backend tests against real PostgreSQL, frontend type check/tests/build, dependency audits, and a full Docker stack health check.
-- **Tests** (all phases): 200 backend + 39 frontend, all passing, plus browser end-to-end runs and a CI smoke test that uploads a document, asks questions and runs an approved agent task through the Docker stack. Details in [`docs/testing.md`](docs/testing.md).
+- **Tests** (all phases): 239 backend + 45 frontend, all passing, plus browser end-to-end runs and a CI smoke test that uploads a document, asks questions, runs an approved agent task, and drives the mock ServiceNow, Salesforce and email services through the Docker stack. Details in [`docs/testing.md`](docs/testing.md).
 
 ## Architecture
 
@@ -100,10 +110,10 @@ Full diagrams, component responsibilities and design decisions: [`docs/architect
 
 ## Tech stack
 
-| Layer | Now (Phase 5) | Planned |
+| Layer | Now (Phase 6) | Planned |
 |---|---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, React Router, TanStack Query | — |
-| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx, LangGraph; background worker; hybrid RAG with an OpenAI-compatible LLM client | Connector framework |
+| Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx, LangGraph, cryptography (Fernet); background worker; hybrid RAG with an OpenAI-compatible LLM client; connector framework | Kafka event log |
 | Data | PostgreSQL 16 + pgvector, Redis | Kafka |
 | Infra | Docker, Docker Compose, GitHub Actions | AWS, Terraform (if deployed) |
 | Observability | Structured logs, request IDs | OpenTelemetry, Prometheus, Grafana |
@@ -122,7 +132,8 @@ docker compose up --build
 
 Then open:
 
-- App: http://localhost:5173 (click **Create an organization**, upload files in **Documents**, then ask questions in **AI Chat**). To try approvals, add a manager in **Users**: nobody can approve their own agent request.
+- App: http://localhost:5173 (click **Create an organization**, upload files in **Documents**, then ask questions in **AI Chat**). To try approvals, add a manager in **Users**: nobody can approve their own agent request. In **Integrations**, click "Fill in the bundled mock service" to connect the mock ServiceNow, Salesforce and email.
+- Mock services: http://localhost:9000/docs (inspect with `/_mock/state`)
 - Optional: set `NEXUS_OPENAI_API_KEY` and `NEXUS_ANSWER_PROVIDER=openai` (and `NEXUS_EMBEDDING_PROVIDER=openai`) in `.env` for LLM answers and semantic search. If you change the embedding provider, reprocess your documents.
 - API docs (Swagger): http://localhost:8000/docs
 - Readiness: http://localhost:8000/api/v1/health/ready
@@ -208,7 +219,12 @@ Interactive docs: http://localhost:8000/docs (disabled in production).
 | POST | `/api/v1/agents/runs/{id}/retry` | manager, org admin | Retry a failed approved run (completed steps aren't repeated) |
 | GET | `/api/v1/approvals`, `/approvals/{id}` | manager, org admin | Approval queue (`?status=pending`), with the exact actions |
 | POST | `/api/v1/approvals/{id}/approve`, `/reject` | manager, org admin (not the requester) | Decide, with an optional comment |
-| GET | `/api/v1/tickets`, `/api/v1/outbox` | org member / manager, org admin | Records created by approved actions |
+| GET | `/api/v1/tickets`, `/api/v1/outbox` | org member / manager, org admin | Records created by approved actions (with ServiceNow / email references) |
+| GET | `/api/v1/integrations` | manager, org admin | Connections with health; secrets are never returned |
+| POST / PATCH / DELETE | `/api/v1/integrations`, `/integrations/{id}` | org admin | Connect, update (write-only secrets, enable/disable), disconnect |
+| POST | `/api/v1/integrations/{id}/test`, `/rotate-webhook-secret` | org admin | Health check; new webhook secret (shown once) |
+| GET | `/api/v1/integrations/{id}/calls` | manager, org admin | Recent calls: operation, outcome, status, attempts, latency |
+| POST | `/api/v1/webhooks/servicenow/{id}` | signed by ServiceNow | Incident updates (HMAC + timestamp verified, de-duplicated) |
 
 **Creating the platform super admin** (there is deliberately no API for this):
 
@@ -226,6 +242,7 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 - [`docs/architecture.md`](docs/architecture.md): architecture diagrams and decisions
 - [`docs/security.md`](docs/security.md): authentication, RBAC, tenant isolation, threat model, known limitations
 - [`docs/database-design.md`](docs/database-design.md): ER diagram, constraints, indexes, design decisions
+- [`docs/integrations-design.md`](docs/integrations-design.md): connectors, retries, idempotency, credentials, webhooks, honest limits
 - [`docs/agents-design.md`](docs/agents-design.md): agent workflow, tools, planners, approval rules, reliability
 - [`docs/ai-design.md`](docs/ai-design.md): ingestion, retrieval, answers with citations, prompt-injection handling, evaluation results, limitations
 - [`docs/operations.md`](docs/operations.md): services, worker, queries, troubleshooting
@@ -235,7 +252,7 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 
 ```
 nexusai/
-├── backend/            FastAPI app, Alembic migrations, tests
+├── backend/            FastAPI app (+ mock enterprise services), Alembic migrations, tests
 ├── frontend/           React + TypeScript app, nginx config
 ├── infra/              Postgres init scripts (observability config in later phases)
 ├── scripts/            End-to-end smoke test used by CI

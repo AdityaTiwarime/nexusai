@@ -106,7 +106,8 @@ All business tables carry `organization_id` (tenant key) and are queried through
 | agent_runs | id, organization_id, requested_by, request, status, planner, steps JSONB, summary | Phase 5 ✅ |
 | approval_requests | id, agent_run_id (unique), actions JSONB snapshot, status, requested_by, decided_by, comment, expires_at | Phase 5 ✅ |
 | tickets / outbox_messages | records created by approved actions, unique per (run, step) | Phase 5 ✅ |
-| integrations / integration_credentials | connector type, config JSONB; credentials encrypted at rest | Phase 6 |
+| integrations | kind, base_url, config JSONB, secrets **encrypted**, webhook secret (encrypted), status, health | Phase 6 ✅ |
+| integration_calls / webhook_events | call log (outcome, attempts, latency); received webhooks (unique event id) | Phase 6 ✅ |
 | system_events | id, event_type, idempotency_key (unique), payload JSONB, status | Phase 7 |
 | incidents | id, organization_id, title, timeline JSONB, evidence JSONB, hypotheses JSONB | Phase 9 |
 
@@ -196,12 +197,16 @@ On your machine:
 | Human approval: exact-action snapshot, separation of duties, expiry, race-safe decisions, audit | ✅ Implemented (Phase 5) |
 | Idempotent execution, savepoints, verification and retry | ✅ Implemented (Phase 5) |
 | Planners: offline rules (default) and LLM JSON planner with validation | ✅ Implemented (Phase 5). LLM planner tested against a mocked API only |
+| Connectors: ServiceNow (incidents), Salesforce (customer lookup, OAuth), email (send) | ✅ Implemented (Phase 6) against **mock services** with synthetic data; not run against real accounts |
+| Connector framework: host allowlist (SSRF), timeouts, retries with backoff and Retry-After, idempotency keys, call log | ✅ Implemented (Phase 6) |
+| Credentials encrypted at rest, never returned by the API | ✅ Implemented (Phase 6) |
+| Signed webhooks (HMAC, timestamp, dedupe) updating tickets | ✅ Implemented (Phase 6) |
 | AI Chat with citations, "no evidence" answers, private conversations, follow-ups | ✅ Implemented (Phase 4) |
 | Answer providers: offline extractive (default) and OpenAI-compatible LLM | ✅ Implemented (Phase 4). LLM tested against a mocked API only; answer quality with a real model not yet measured |
 | RAG benchmark (retrieval hit@k, cited-answer accuracy, refusals) | ✅ Implemented (Phase 4); results in `docs/ai-design.md` |
 | Streaming answers, cross-encoder reranking, query rewriting for follow-ups | ⏳ Possible improvements |
-| Email verification, password reset, SSO/MFA | ⏳ Planned (Phase 6) |
-| Everything else | ⏳ Planned (Phases 6–10) |
+| Email verification, password reset, SSO/MFA | ⏳ Not built yet (moved to Phase 10) |
+| Everything else | ⏳ Planned (Phases 7–10) |
 
 ## 9. Feature verification matrix
 
@@ -217,7 +222,7 @@ Filled in only from real test runs and evidence. See `docs/testing.md`.
 | Authentication (JWT + refresh rotation) | Yes | Yes | `backend/tests/test_auth.py`, `frontend/src/test/auth.test.tsx` |
 | RBAC / tenant isolation | Yes | Yes | `backend/tests/test_rbac_and_tenancy.py` |
 | Audit logging | Yes | Yes | `backend/tests/test_rbac_and_tenancy.py`, `test_auth.py` |
-| Enterprise connectors | No | No | — |
+| Enterprise connectors (mock systems) | Yes | Yes | `backend/tests/test_integrations.py`, `test_connectors.py`, `frontend/src/test/integrations.test.tsx`, `scripts/smoke_test.py` |
 | Observability | No | No | — |
 | Incident investigation | No | No | — |
 | Docker deployment | Yes | Yes (CI builds all images, checks health, and runs an upload → worker → chunks smoke test) | `.github/workflows/ci.yml` (docker job), `scripts/smoke_test.py` |

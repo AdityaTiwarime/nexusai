@@ -7,6 +7,7 @@ import { chunkLink } from "./rag";
 
 export const TOOL_LABELS: Record<string, string> = {
   search_documents: "Search documents",
+  lookup_customer: "Look up customer",
   create_ticket: "Create ticket",
   notify_customer: "Email customer",
 };
@@ -45,7 +46,7 @@ export function StatusChip({ status }: { status: RunStatus | StepStatus | Approv
 }
 
 /** Tool arguments exactly as they will run. Long text keeps its line breaks. */
-const ARG_ORDER = ["query", "title", "priority", "customer_email", "description", "to", "subject", "body"];
+const ARG_ORDER = ["query", "email", "title", "priority", "customer_email", "description", "to", "subject", "body"];
 
 export function ArgsTable({ args }: { args: Record<string, unknown> }) {
   // The database doesn't keep key order; show arguments in a reading order.
@@ -82,11 +83,46 @@ function StepResult({ step }: { step: AgentStep }) {
       </ul>
     );
   }
+  if (step.tool === "lookup_customer") {
+    if (!result.found) {
+      return <p className="text-sm text-slate-500">{String(result.note ?? "Customer not found in Salesforce.")}</p>;
+    }
+    return (
+      <p className="text-sm text-slate-700">
+        <span className="font-semibold">{String(result.name)}</span> · {String(result.account)} ·{" "}
+        {String(result.tier)} tier · owner {String(result.owner)}
+        <span className="ml-2 text-xs text-slate-500">from Salesforce</span>
+      </p>
+    );
+  }
+  const verified = result.verified === true && <span className="ml-2 text-xs text-emerald-700">✓ verified</span>;
   if (step.tool === "create_ticket") {
     return (
       <p className="text-sm text-slate-700">
         Created <span className="font-semibold">{String(result.ticket_number)}</span> ({String(result.priority)} priority)
-        {result.verified === true && <span className="ml-2 text-xs text-emerald-700">✓ verified</span>}
+        {typeof result.external_number === "string" && (
+          <>
+            {" "}
+            in ServiceNow as{" "}
+            <a
+              href={String(result.external_url)}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="font-semibold text-brand-700 hover:underline"
+            >
+              {result.external_number}
+            </a>
+          </>
+        )}
+        {verified}
+      </p>
+    );
+  }
+  if (result.status === "sent") {
+    return (
+      <p className="text-sm text-slate-700">
+        Sent an email to <span className="font-medium">{String(result.to)}</span> through the email connection.
+        {verified}
       </p>
     );
   }
@@ -94,7 +130,7 @@ function StepResult({ step }: { step: AgentStep }) {
     <p className="text-sm text-slate-700">
       Recorded an email to <span className="font-medium">{String(result.to)}</span>.{" "}
       <span className="text-slate-500">{String(result.note ?? "")}</span>
-      {result.verified === true && <span className="ml-2 text-xs text-emerald-700">✓ verified</span>}
+      {verified}
     </p>
   );
 }

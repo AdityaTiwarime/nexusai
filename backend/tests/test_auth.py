@@ -250,5 +250,10 @@ def test_production_requires_secure_cookies():
 
 
 def test_production_accepts_a_strong_secret():
-    settings = make_settings(environment="production", jwt_secret="x" * 40, cookie_secure=True)
+    settings = make_settings(
+        environment="production",
+        jwt_secret="x" * 40,
+        cookie_secure=True,
+        encryption_key="cHJvZC10ZXN0LWtleS1ub3QtdGhlLWRldi1vbmUtMTI=",
+    )
     assert settings.is_production

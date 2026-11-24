@@ -110,6 +110,10 @@ sequenceDiagram
 
 Details: [`ai-design.md`](ai-design.md) (pipeline) and [`operations.md`](operations.md) (running the worker).
 
+## Integrations (Phase 6)
+
+Agent tools reach external systems only through per-organization connectors (allowlisted hosts, timeouts, retries with backoff, idempotency keys, call log). ServiceNow reports changes back through signed webhooks. In this repository the external systems are a mock service container. Details: [`integrations-design.md`](integrations-design.md).
+
 ## Agent approval flow (Phase 5)
 
 ```mermaid

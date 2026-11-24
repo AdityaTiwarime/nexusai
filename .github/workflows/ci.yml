@@ -88,7 +88,8 @@ jobs:
           curl -fsS http://localhost:8000/api/v1/health/ready
           curl -fsS http://localhost:5173/api/v1/health/ready
           curl -fsS http://localhost:5173/ | grep -q '<div id="root">'
-      - name: End-to-end smoke test (upload -> worker -> chunks)
+          curl -fsS http://localhost:9000/health
+      - name: End-to-end smoke test (documents, chat, agents, integrations, webhooks)
         run: python3 scripts/smoke_test.py http://localhost:5173
       - name: Logs on failure
         if: failure()

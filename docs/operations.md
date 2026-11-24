@@ -11,6 +11,7 @@ How to run, watch and troubleshoot the services. Grows as phases add components.
 | `backend` | FastAPI API; runs migrations on start | `GET /api/v1/health/live` | UI can't load data |
 | `worker` | Processes uploaded documents | Heartbeat file younger than 60 s (`python -m app.worker --healthcheck`) | Uploads still succeed and stay **Queued**; they're processed as soon as a worker is back |
 | `frontend` | nginx serving the React app, proxying `/api` | container running | UI unavailable |
+| `mock-services` | Simulated ServiceNow, Salesforce and email APIs (port 9000, synthetic data) | `GET /health` | Connected integrations show **Failing**; agent actions that need them fail and can be retried |
 
 ## The ingestion worker
 
@@ -59,8 +60,20 @@ WHERE status = 'running' AND locked_at < now() - interval '5 minutes';
 | Agent run stays **Awaiting approval** | Nobody else with the manager/admin role has decided yet (you can't approve your own) | Ask another manager or admin; requests expire after `NEXUS_APPROVAL_TTL_HOURS` |
 | Agent run **Failed** after approval | An action failed (see the step's error and the `agent.action_failed` audit entry) | Fix the cause, then **Retry failed steps** on the run (completed steps aren't repeated) |
 | "I couldn't turn this into actions" | The rule planner didn't recognise the request | Mention a ticket and/or an email address explicitly, or use `NEXUS_AGENT_PLANNER=openai` |
+| Integration shows **Failing** | Wrong credentials (HTTP 401, not retried), host not allowed, or the system is down | Check **Recent calls** on the Integrations page, fix and **Test connection** |
+| Agent step failed: `servicenow create_incident failed: returned HTTP 429` | The external system rate-limited us after all retries | **Retry failed steps** later; the idempotency key prevents a duplicate incident |
+| Webhook returns **401** | Wrong secret, or the sender's clock is off by more than 5 minutes | Rotate the webhook secret and configure the new one in the other system |
 | Login returns **429** | Too many attempts (per IP per minute, or failed logins per account per 15 min) | Wait for `Retry-After` seconds |
 | Upload returns **413** from nginx | File over 25 MB | Limit is `NEXUS_MAX_UPLOAD_MB` (20) at the API; nginx allows slightly more so the API's clearer message is shown |
+
+## Trying the mock systems
+
+```bash
+curl -X POST localhost:9000/_mock/faults -H 'Content-Type: application/json' \
+     -d '{"service": "servicenow", "mode": "flaky", "count": 2}'   # next 2 calls fail with 503
+curl localhost:9000/_mock/state                                       # incidents, sent mail, webhooks
+curl -X POST localhost:9000/_mock/servicenow/incidents/INC0010001/resolve  # fires the signed webhook
+```
 
 ## Data
 

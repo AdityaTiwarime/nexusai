@@ -33,6 +33,8 @@ from app.modules.agents.models import OutboxMessage, RunStatus, Ticket
 from app.modules.agents.planner import Planner, PlanningError, validate_plan
 from app.modules.agents.tools import TOOLS, ToolContext
 from app.modules.auth.models import User
+from app.modules.integrations.connectors import ConnectorError
+from app.modules.integrations.runtime import IntegrationHub
 
 logger = logging.getLogger("nexusai.agents")
 
@@ -62,6 +64,7 @@ class Deps:
     embedder: EmbeddingProvider
     run_id: uuid.UUID
     planner: Planner | None = None
+    integrations: IntegrationHub | None = None
 
 
 def _deps(config: RunnableConfig) -> Deps:
@@ -77,6 +80,7 @@ def _context(deps: Deps, index: int, outputs: dict[str, str]) -> ToolContext:
         run_id=deps.run_id,
         step_index=index,
         outputs=outputs,
+        integrations=deps.integrations,
     )
 
 
@@ -88,6 +92,10 @@ async def _run_step(deps: Deps, step: dict[str, Any], outputs: dict[str, str]) -
         async with deps.session.begin_nested():
             step["result"] = await tool.run(_context(deps, step["index"], outputs), args)
         step["status"] = StepStatus.DONE
+    except ConnectorError as exc:  # external system problem: its message is user-safe
+        logger.warning("agent step failed", extra={"run_id": str(deps.run_id), "error": str(exc)})
+        step["status"] = StepStatus.FAILED
+        step["error"] = str(exc)
     except Exception as exc:
         logger.exception("agent step failed", extra={"run_id": str(deps.run_id), "tool": tool.name})
         step["status"] = StepStatus.FAILED
@@ -184,7 +192,8 @@ async def execute_node(state: AgentState, config: RunnableConfig) -> AgentState:
     outputs: dict[str, str] = {}
     for s in steps:
         if s["status"] == StepStatus.DONE and s["result"] and "ticket_number" in s["result"]:
-            outputs["ticket_number"] = s["result"]["ticket_number"]
+            result = s["result"]
+            outputs["ticket_number"] = result.get("external_number") or result["ticket_number"]
     failed = False
     for step in steps:
         if not step["mutating"] or step["status"] == StepStatus.DONE:
@@ -250,12 +259,25 @@ def summarize(steps: list[dict[str, Any]], pending: bool = False) -> str:
                 if titles
                 else "No relevant documents found."
             )
+        elif s["status"] == StepStatus.DONE and s["tool"] == "lookup_customer":
+            if result.get("found"):
+                parts.append(f"Customer: {result['name']} ({result['account']}, {result['tier']}).")
+            elif result.get("source"):
+                parts.append("Customer not found in Salesforce.")
         elif s["status"] == StepStatus.DONE and s["tool"] == "create_ticket":
+            where = (
+                f" (ServiceNow {result['external_number']})"
+                if result.get("external_number")
+                else ""
+            )
             parts.append(
-                f"Created ticket {result['ticket_number']} ({result['priority']} priority)."
+                f"Created ticket {result['ticket_number']}{where} ({result['priority']} priority)."
             )
         elif s["status"] == StepStatus.DONE and s["tool"] == "notify_customer":
-            parts.append(f"Recorded an email to {result['to']} in the outbox (not sent).")
+            if result.get("status") == "sent":
+                parts.append(f"Sent an email to {result['to']}.")
+            else:
+                parts.append(f"Recorded an email to {result['to']} in the outbox (not sent).")
         elif s["status"] == StepStatus.FAILED:
             parts.append(f"Step {s['index'] + 1} failed: {s['error']}.")
     if pending:

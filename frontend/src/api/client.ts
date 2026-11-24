@@ -397,6 +397,44 @@ export interface Approval {
   created_at: string;
 }
 
+export type IntegrationKind = "servicenow" | "salesforce" | "email";
+
+export interface Integration {
+  id: string;
+  kind: IntegrationKind;
+  label: string;
+  name: string;
+  base_url: string;
+  config: Record<string, unknown>;
+  secret_fields: string[];
+  status: "active" | "disabled";
+  health_status: "unknown" | "ok" | "error";
+  health_checked_at: string | null;
+  last_error: string | null;
+  webhook_url: string | null;
+  created_at: string;
+  webhook_secret?: string | null;
+}
+
+export interface IntegrationInput {
+  kind: IntegrationKind;
+  name: string;
+  base_url: string;
+  config?: Record<string, unknown>;
+  secrets: Record<string, string>;
+}
+
+export interface IntegrationCall {
+  id: string;
+  operation: string;
+  outcome: "success" | "failure";
+  http_status: number | null;
+  attempts: number;
+  latency_ms: number;
+  error: string | null;
+  created_at: string;
+}
+
 // --- endpoints ---------------------------------------------------------------------
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -489,6 +527,16 @@ export const api = {
     request<Approval[]>(`/approvals${status ? `?status=${status}` : ""}`),
   decide: (id: string, decision: "approve" | "reject", comment?: string) =>
     request<AgentRun>(`/approvals/${id}/${decision}`, json(comment ? { comment } : {})),
+
+  listIntegrations: () => request<Integration[]>("/integrations"),
+  createIntegration: (input: IntegrationInput) => request<Integration>("/integrations", json(input)),
+  updateIntegration: (id: string, input: Partial<Omit<IntegrationInput, "kind">> & { status?: "active" | "disabled" }) =>
+    request<Integration>(`/integrations/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteIntegration: (id: string) => request<void>(`/integrations/${id}`, { method: "DELETE" }),
+  testIntegration: (id: string) => request<Integration>(`/integrations/${id}/test`, { method: "POST" }),
+  rotateWebhookSecret: (id: string) =>
+    request<Integration>(`/integrations/${id}/rotate-webhook-secret`, { method: "POST" }),
+  integrationCalls: (id: string) => request<IntegrationCall[]>(`/integrations/${id}/calls`),
 
   downloadDocument: (id: string, version: DocumentVersion) =>
     download(`/documents/${id}/download?version=${version.version}`, version.original_filename),

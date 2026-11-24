@@ -18,6 +18,10 @@ x-backend-env: &backend-env
   NEXUS_ANSWER_PROVIDER: ${NEXUS_ANSWER_PROVIDER:-extractive}
   NEXUS_CHAT_MODEL: ${NEXUS_CHAT_MODEL:-gpt-4o-mini}
   NEXUS_AGENT_PLANNER: ${NEXUS_AGENT_PLANNER:-rules}
+  NEXUS_ENCRYPTION_KEY: ${NEXUS_ENCRYPTION_KEY:-ZGV2LW9ubHktbmV4dXNhaS1lbmNyeXB0aW9uLWtleSE=}
+  NEXUS_INTEGRATION_ALLOWED_HOSTS: ${NEXUS_INTEGRATION_ALLOWED_HOSTS:-mock-services,localhost}
+  # How other containers (e.g. the mock ServiceNow sending webhooks) reach this API.
+  NEXUS_PUBLIC_API_URL: ${NEXUS_PUBLIC_API_URL:-http://backend:8000}
 
 services:
   db:
@@ -85,6 +89,18 @@ services:
       # The backend container runs the migrations, so wait for it.
       backend:
         condition: service_healthy
+
+  mock-services:
+    # Simulated ServiceNow, Salesforce and email APIs with synthetic data (test infrastructure).
+    build: ./backend
+    command: ["uvicorn", "app.mock_services.main:app", "--host", "0.0.0.0", "--port", "9000"]
+    ports:
+      - "${MOCK_SERVICES_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/health', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   frontend:
     build: ./frontend

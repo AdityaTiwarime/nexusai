@@ -147,6 +147,14 @@ class RulePlanner:
 
         steps: list[PlannedStep] = []
         title = _topic(request)
+        if emails and (wants_ticket or wants_notify):
+            steps.append(
+                PlannedStep(
+                    "lookup_customer",
+                    {"email": emails[0]},
+                    "Check who the customer is in the CRM.",
+                )
+            )
         if wants_search:
             steps.append(
                 PlannedStep(
@@ -193,8 +201,9 @@ class RulePlanner:
                 )
             )
         # A bare question with nothing to search for is not a plan.
-        if steps and steps[0].tool == "search_documents" and len(steps[0].args["query"]) < 2:
-            steps.pop(0)
+        steps = [
+            s for s in steps if not (s.tool == "search_documents" and len(s.args["query"]) < 2)
+        ]
         return steps
 
 

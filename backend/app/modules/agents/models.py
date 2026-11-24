@@ -4,9 +4,9 @@
   the status of every step.
 - ApprovalRequest: a frozen snapshot of the exact actions a human must approve
   before any of them runs. What is approved is exactly what executes.
-- Ticket / OutboxMessage: the internal systems the tools write to. They stand in
-  for ServiceNow and email until the connectors arrive in Phase 6; outbox
-  messages are recorded, never actually sent.
+- Ticket / OutboxMessage: what the tools created. With a ServiceNow or email
+  connection (Phase 6) they also point to the record in the external system;
+  without one they are internal records only.
 
 Side effects carry (agent_run_id, step_index) with a unique constraint, so a step
 can never create its record twice, even if execution is retried.
@@ -113,6 +113,7 @@ class Ticket(UUIDPrimaryKey, Timestamps, Base):
         CheckConstraint("priority IN ('low', 'medium', 'high')", name="priority_valid"),
         UniqueConstraint("organization_id", "number", name="uq_tickets_organization_number"),
         UniqueConstraint("agent_run_id", "step_index", name="uq_tickets_run_step"),
+        Index("ix_tickets_external_system_external_id", "external_system", "external_id"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -124,6 +125,11 @@ class Ticket(UUIDPrimaryKey, Timestamps, Base):
     priority: Mapped[str] = mapped_column(String(8), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     customer_email: Mapped[str | None] = mapped_column(String(320))
+    # Set when the ticket was created in an external system (e.g. ServiceNow).
+    external_system: Mapped[str | None] = mapped_column(String(32))
+    external_id: Mapped[str | None] = mapped_column(String(100))
+    external_number: Mapped[str | None] = mapped_column(String(64))
+    external_url: Mapped[str | None] = mapped_column(String(500))
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
@@ -146,8 +152,10 @@ class OutboxMessage(UUIDPrimaryKey, Base):
     recipient: Mapped[str] = mapped_column(String(320), nullable=False)
     subject: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    # Always "recorded": nothing is sent until a real email connector exists (Phase 6).
+    # "recorded" = no email connection configured, nothing sent; "sent" = handed to the provider.
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="recorded")
+    provider_message_id: Mapped[str | None] = mapped_column(String(200))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     agent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("agent_runs.id", ondelete="SET NULL")
     )

@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from app.core.config import DEV_ENCRYPTION_KEY, Settings
 from tests.conftest import make_settings
 
 
@@ -34,18 +35,40 @@ def test_settings_load_from_environment_like_docker(monkeypatch, raw, expected):
     assert "@db:5432/nexusai" in str(settings.database_url)
 
 
+PROD = {
+    "environment": "production",
+    "jwt_secret": "x" * 40,
+    "cookie_secure": True,
+    "encryption_key": "cHJvZC10ZXN0LWtleS1ub3QtdGhlLWRldi1vbmUtMTI=",
+}
+
+
 def test_production_flag():
-    assert make_settings(
-        environment="production", jwt_secret="x" * 40, cookie_secure=True
-    ).is_production
+    assert make_settings(**PROD).is_production
     assert not make_settings(environment="local").is_production
 
 
 def test_docs_disabled_in_production():
     from app.main import create_app
 
-    app = create_app(
-        make_settings(environment="production", jwt_secret="x" * 40, cookie_secure=True)
-    )
+    app = create_app(make_settings(**PROD))
     assert app.docs_url is None
     assert app.openapi_url is None
+
+
+def test_production_refuses_the_dev_encryption_key():
+    with pytest.raises(ValueError, match="NEXUS_ENCRYPTION_KEY"):
+        make_settings(**{**PROD, "encryption_key": DEV_ENCRYPTION_KEY})
+
+
+def test_encryption_key_must_be_a_fernet_key():
+    with pytest.raises(ValueError, match="Fernet key"):
+        make_settings(encryption_key="not-a-key")
+
+
+def test_integration_hosts_from_env(monkeypatch):
+    monkeypatch.setenv("NEXUS_INTEGRATION_ALLOWED_HOSTS", "mock-services, API.Example.com")
+    assert Settings(_env_file=None).integration_allowed_hosts == [
+        "mock-services",
+        "api.example.com",
+    ]

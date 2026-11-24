@@ -25,6 +25,7 @@ from app.modules.agents.planner import Planner
 from app.modules.audit import service as audit
 from app.modules.auth.models import User
 from app.modules.auth.roles import Role
+from app.modules.integrations.runtime import IntegrationRuntime
 
 APPROVER_ROLES = {Role.ORG_ADMIN.value, Role.MANAGER.value}
 
@@ -66,9 +67,11 @@ async def start_run(
     embedder: EmbeddingProvider,
     settings: Settings,
     http_request: Request | None,
+    integrations: IntegrationRuntime | None = None,
 ) -> AgentRun:
     run_id = uuid.uuid4()
-    deps = Deps(session, user, settings, embedder, run_id, planner)
+    hub = integrations.for_org(session, user.organization_id) if integrations else None
+    deps = Deps(session, user, settings, embedder, run_id, planner, hub)
     state = await PLAN_GRAPH.ainvoke(
         {"request": request_text.strip()}, config={"configurable": {"deps": deps}}
     )
@@ -179,6 +182,7 @@ async def decide(
     embedder: EmbeddingProvider,
     settings: Settings,
     http_request: Request | None,
+    integrations: IntegrationRuntime | None = None,
 ) -> AgentRun:
     await expire_overdue(session, user.organization_id)
     approval = await get_approval(session, approval_id, user)
@@ -243,6 +247,7 @@ async def decide(
         embedder=embedder,
         settings=settings,
         http_request=http_request,
+        integrations=integrations,
     )
 
 
@@ -254,10 +259,12 @@ async def execute(
     embedder: EmbeddingProvider,
     settings: Settings,
     http_request: Request | None,
+    integrations: IntegrationRuntime | None = None,
 ) -> AgentRun:
     # Records are created on behalf of the requester; the approver is in the audit log.
     requester = await session.get(User, run.requested_by) if run.requested_by else None
-    deps = Deps(session, requester or actor, settings, embedder, run.id)
+    hub = integrations.for_org(session, run.organization_id) if integrations else None
+    deps = Deps(session, requester or actor, settings, embedder, run.id, integrations=hub)
     state = await EXECUTE_GRAPH.ainvoke(
         {"request": run.request, "steps": run.steps}, config={"configurable": {"deps": deps}}
     )
@@ -298,6 +305,7 @@ async def retry(
     embedder: EmbeddingProvider,
     settings: Settings,
     http_request: Request | None,
+    integrations: IntegrationRuntime | None = None,
 ) -> AgentRun:
     approval = await session.scalar(
         select(ApprovalRequest).where(ApprovalRequest.agent_run_id == run.id)
@@ -322,6 +330,7 @@ async def retry(
         embedder=embedder,
         settings=settings,
         http_request=http_request,
+        integrations=integrations,
     )
 
 

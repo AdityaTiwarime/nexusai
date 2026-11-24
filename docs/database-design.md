@@ -2,7 +2,7 @@
 
 PostgreSQL 16 is the system of record. Schema changes are made only through Alembic migrations in `backend/alembic/versions/`, and a test (`alembic check`) fails if the ORM models drift from the migrations.
 
-## Current schema (Phases 2–5)
+## Current schema (Phases 2–6)
 
 ```mermaid
 erDiagram
@@ -21,6 +21,9 @@ erDiagram
     agent_runs ||--o| approval_requests : "waits for"
     agent_runs ||--o{ tickets : "creates"
     agent_runs ||--o{ outbox_messages : "records"
+    organizations ||--o{ integrations : "connects"
+    integrations ||--o{ integration_calls : "logs"
+    integrations ||--o{ webhook_events : "receives"
 
     organizations {
         uuid id PK
@@ -161,6 +164,9 @@ erDiagram
         varchar customer_email
         uuid agent_run_id FK
         int step_index "UNIQUE with run"
+        varchar external_system "servicenow"
+        varchar external_id
+        varchar external_number "INC..."
     }
     outbox_messages {
         uuid id PK
@@ -168,9 +174,37 @@ erDiagram
         varchar recipient
         varchar subject
         text body
-        varchar status "recorded (never sent yet)"
+        varchar status "recorded or sent"
+        varchar provider_message_id
         uuid agent_run_id FK
         int step_index "UNIQUE with run"
+    }
+    integrations {
+        uuid id PK
+        uuid organization_id FK "UNIQUE with kind"
+        varchar kind "servicenow/salesforce/email"
+        varchar base_url "allowlisted host"
+        jsonb config
+        text secrets_encrypted "Fernet"
+        text webhook_secret_encrypted
+        varchar status
+        varchar health_status
+    }
+    integration_calls {
+        uuid id PK
+        uuid integration_id FK
+        varchar operation
+        varchar outcome
+        int http_status
+        int attempts
+        int latency_ms
+    }
+    webhook_events {
+        uuid id PK
+        uuid integration_id FK
+        varchar event_id "UNIQUE with integration"
+        varchar event_type
+        jsonb payload
     }
 ```
 
@@ -190,7 +224,9 @@ erDiagram
 | documents → versions, chunks, jobs | `ON DELETE CASCADE` | Deleting a document removes everything derived from it in one statement. |
 | approval_requests | `UNIQUE (agent_run_id)` | One approval per run. |
 | tickets, outbox_messages | `UNIQUE (agent_run_id, step_index)` | An approved action can never create its record twice, even when retried. |
-| tickets | `UNIQUE (organization_id, number)` | Human-friendly ticket numbers that can't collide. |
+| tickets | `UNIQUE (organization_id, number)` | Human-friendly ticket numbers that can't collide (allocated under a per-organization advisory lock). |
+| integrations | `UNIQUE (organization_id, kind)` | One connection per system, so tools know which to use. |
+| webhook_events | `UNIQUE (integration_id, event_id)` | A redelivered webhook is recorded and applied once. |
 | document_chunks.tsv | `GENERATED ALWAYS AS (to_tsvector('english', content)) STORED` | Keyword index can never drift from the text. |
 
 ## Indexes
@@ -209,6 +245,8 @@ erDiagram
 | `messages (conversation_id, created_at)` | Loading one conversation in order. |
 | `agent_runs (organization_id, created_at)`, `agent_runs (requested_by)` | Run lists for managers, and for each employee. |
 | `approval_requests (organization_id, status)` | The pending-approvals queue. |
+| `integration_calls (integration_id, created_at)` | Recent calls on the Integrations page. |
+| `tickets (external_system, external_id)` | Finding the ticket a webhook is about. |
 
 **Tenant-first composite indexes** are the rule for every tenant-owned table: almost every query starts with `WHERE organization_id = :caller_org`.
 
@@ -227,6 +265,5 @@ erDiagram
 
 | Phase | Tables |
 |---|---|
-| 6 | `integrations`, `integration_credentials` (encrypted at rest) |
 | 7 | `system_events` (unique idempotency key) |
 | 9 | `incidents` |

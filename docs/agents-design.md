@@ -35,8 +35,9 @@ The registry in `backend/app/modules/agents/tools.py` is the **complete** list o
 | Tool | Changes anything? | What it does |
 |---|---|---|
 | `search_documents` | No, runs immediately | Hybrid search (Phase 4) with the **requester's** permissions |
-| `create_ticket` | Yes, needs approval | Creates a ticket (`TCK-1001`, `TCK-1002`, … per organization) in the internal ticketing table |
-| `notify_customer` | Yes, needs approval | Records an email in the outbox. **Nothing is actually sent**: there's no email connector until Phase 6. `{{ticket_number}}` is replaced by the ticket created earlier in the same run. |
+| `create_ticket` | Yes, needs approval | Creates a ticket (`TCK-1001`, … per organization); with a ServiceNow connection also a ServiceNow incident (Phase 6) |
+| `lookup_customer` | No, runs immediately | Looks up the customer in Salesforce if connected (Phase 6) |
+| `notify_customer` | Yes, needs approval | Sends the email through the email connection if configured (Phase 6), otherwise only records it in the outbox. `{{ticket_number}}` is replaced by the ticket created earlier in the same run (the ServiceNow number when connected). |
 
 Every tool has a strict argument schema (Pydantic, unknown fields forbidden). Arguments are validated when the plan is made, and again right before execution.
 
@@ -71,5 +72,4 @@ Every tool has a strict argument schema (Pydantic, unknown fields forbidden). Ar
 
 - Execution runs inside the approval request (actions are single database writes, so this is quick). Long-running tools would move to the background worker.
 - Plans can't be edited before approval; reject the plan and submit a new request.
-- Outbox messages are recorded, not sent, until the email connector (Phase 6).
 - The rule planner is deliberately simple. The LLM planner is the path to flexible requests, but its plan quality hasn't been evaluated with a real model.
