@@ -34,13 +34,13 @@ npm run build
 
 Run on 24 Nov 2026, Linux, Python 3.13, Node 22, PostgreSQL 16.
 
-**Backend: 17 passed**
+**Backend: 20 passed**
 
 | File | What it proves |
 |---|---|
 | `test_health.py` (5) | Liveness is OK; readiness is OK with the real DB and reports latency; readiness returns **503** when the DB is unreachable and **does not leak** the password or host; liveness stays OK when the DB is down; system info endpoint |
 | `test_middleware.py` (6) | Request IDs are generated, safe incoming IDs are echoed, unsafe IDs are replaced; unhandled errors return a 500 with the request ID and no internal details; CORS allows the configured origin and rejects others |
-| `test_config.py` (4) | Non-async database drivers are rejected at startup; comma-separated CORS origins parse; API docs are disabled in production |
+| `test_config.py` (7) | Non-async database drivers are rejected at startup; settings load from plain environment variables exactly as Docker passes them (single, comma-separated and JSON-list CORS origins); API docs are disabled in production |
 | `test_migrations.py` (2) | Migrations upgrade to head, downgrade to base and re-apply cleanly; there is exactly one migration head |
 
 Lint: `ruff check` and `ruff format --check` clean.

@@ -26,7 +26,7 @@ All data is synthetic. No real customer data or credentials are used.
 - **React + TypeScript dashboard** (Vite, Tailwind, React Router, TanStack Query) showing live system status, with the navigation for all upcoming modules.
 - **Docker Compose** for PostgreSQL (pgvector image), backend and frontend (nginx), with health-checked startup ordering.
 - **GitHub Actions CI**: lint, backend tests against real PostgreSQL, frontend type check/tests/build, dependency audits, and a full Docker stack health check.
-- **Tests**: 17 backend + 4 frontend, all passing. Details in [`docs/testing.md`](docs/testing.md).
+- **Tests**: 20 backend + 4 frontend, all passing. Details in [`docs/testing.md`](docs/testing.md).
 
 ## Architecture
 
