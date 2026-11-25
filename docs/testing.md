@@ -113,6 +113,8 @@ Plus `tsc` type check, production build, and `npm audit` (production dependencie
 
 Not run locally (no Docker daemon or kind in this environment): the production containers themselves, Trivy, ZAP and the kind cluster. Those run in GitHub Actions (`production-stack` and `kubernetes` jobs).
 
+**First CI run:** `infra`, `kubernetes` (including the network-policy enforcement probes) and the production-stack deploy, HTTPS smoke test and forced rollback all passed. The **Trivy scan failed, as designed**, on fixable CRITICAL vulnerabilities: OpenSSL and Brotli in the frontend's Alpine base image, and urllib3 in the backend image. Fix: both images now apply their distribution's security updates at build time (`apk upgrade`, `apt-get upgrade`), the frontend moved to the stable nginx 1.28 line, and pip (with its vendored libraries) is removed from the backend image after installing dependencies.
+
 ### Phase 6 end-to-end (live API + worker + Redis + PostgreSQL + mock services)
 
 - `scripts/smoke_test.py` (also in CI against the Docker stack, including the `mock-services` container): connected ServiceNow, Salesforce and email (health checks passed), then an approved agent run produced `Customer: Jane Cooper (Globex Corporation, Enterprise). Created ticket TCK-1002 (ServiceNow INC0010001) (high priority). Sent an email to jane@globex.com.` Resolving `INC0010001` in the mock ServiceNow delivered a signed webhook (HTTP 200), and the ticket became `resolved`.

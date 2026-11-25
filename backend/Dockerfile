@@ -8,9 +8,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install dependencies first so code changes don't invalidate this layer.
+# Take the latest Debian security fixes, not only what the base image shipped with.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install dependencies first so code changes don't invalidate this layer. pip itself is
+# removed afterwards: the app doesn't need it at runtime, and an old pip carries its own
+# vendored copies of libraries such as urllib3 that image scanners rightly flag.
 COPY pyproject.toml ./
-RUN mkdir app && touch app/__init__.py && pip install . && rm -rf app
+RUN pip install --upgrade pip \
+    && mkdir app && touch app/__init__.py && pip install . && rm -rf app \
+    && pip uninstall -y pip
 
 COPY alembic.ini ./
 COPY alembic ./alembic
