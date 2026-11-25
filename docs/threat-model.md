@@ -80,7 +80,7 @@ flowchart LR
 |---|---|---|---|
 | S/E | Stolen long-lived AWS keys from GitHub | None exist: OIDC federation; role assumable only by `repo:<owner>/<repo>:environment:production`; can only run `AWS-RunShellScript` on one instance | `tofu test` (`deploy_role_is_scoped_…`) |
 | T | Command injection through the deployed tag | The SHA is validated (regex) in the workflow, in `nexusai-deploy` on the server, and as a Terraform variable | `tofu test` (`rejects_a_tag_that_is_not_a_commit_sha`), manual check of `nexusai-deploy` |
-| T | Vulnerable dependencies or base images | `pip-audit`, `npm audit`, Trivy image scan (fails on fixable CRITICAL) | CI `backend`, `frontend`, `production-stack` jobs |
+| T | Vulnerable dependencies or base images | `pip-audit`, `npm audit`, Trivy image scan (report uploaded on every run; not blocking, see `deployment.md`) | CI `backend`, `frontend`, `production-stack` jobs |
 | T | Unreviewed deploys | Optional required reviewers on the `production` environment; deploys only after all CI jobs pass | `deploy.yml` |
 | D | Bad release takes the site down | Health-checked deploy with automatic rollback (server); `maxUnavailable: 0` + rollout undo (Kubernetes) | `deploy/tests`, CI rollback steps |
 
