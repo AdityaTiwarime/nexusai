@@ -97,3 +97,195 @@ jobs:
       - name: Stop stack
         if: always()
         run: docker compose down -v
+
+  infra:
+    # Terraform, Kubernetes manifests and deploy scripts, checked without any cloud account.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.9.1
+          tofu_wrapper: false
+      - name: Terraform format, validate and tests (mocked AWS provider)
+        working-directory: infra/terraform/aws
+        run: |
+          tofu fmt -check -recursive -diff
+          tofu init -backend=false -input=false
+          tofu validate
+          tofu test
+      - name: Shellcheck deploy scripts and the rendered EC2 boot script
+        working-directory: infra/terraform/aws
+        run: |
+          shellcheck ../../../deploy/*.sh ../../../deploy/k8s/tests/*.sh
+          echo 'templatefile("templates/user_data.sh.tftpl", {region="ap-south-1", secret_arn="arn:aws:secretsmanager:ap-south-1:123456789012:secret:nexusai/app", data_volume_id="vol-0123", domain_name="nexusai.example.com", acme_email="ops@example.com", image_registry="ghcr.io/example", image_tag="0123456", repo_url="https://github.com/example/nexusai.git", git_ref="main", allow_public_signup=false, backup_bucket="nexusai-backups", compose_version="2.29.7", compose_sha256="abc"})' \
+            | tofu console | sed -e '/^<<EOT$/d' -e '/^EOT$/d' > /tmp/user_data.sh
+          head -1 /tmp/user_data.sh | grep -qx '#!/bin/bash'
+          shellcheck /tmp/user_data.sh
+      - name: Deploy and backup script tests
+        run: |
+          pip install pytest
+          pytest -v deploy/tests
+      - name: Render and validate Kubernetes manifests
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          mkdir -p rendered
+          for overlay in kind production; do
+            kubectl kustomize deploy/k8s/overlays/$overlay > rendered/$overlay.yaml
+            ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered/$overlay.yaml
+          done
+      - name: Checkov (Terraform + rendered Kubernetes manifests)
+        run: |
+          pip install checkov
+          checkov -d infra/terraform/aws --framework terraform --quiet --compact
+          # Skipped on purpose (see docs/deployment.md): image digests (tags are commit SHAs),
+          # CPU limits (throttling), secrets as env vars (12-factor config), pull policy
+          # Always (kind uses preloaded images), high UIDs for image-defined users.
+          checkov -d rendered --framework kubernetes --quiet --compact \
+            --skip-check CKV_K8S_43,CKV_K8S_11,CKV_K8S_35,CKV_K8S_15,CKV_K8S_40
+
+  production-stack:
+    # The single-server production setup (Caddy HTTPS, read-only containers, internal
+    # data network), started by deploy/deploy.sh exactly as on the server, then
+    # attacked with a broken release (automatic rollback), scanned by Trivy and ZAP.
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    env:
+      NEXUS_IMAGE_TAG: ci
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write CI settings (throwaway secrets)
+        run: |
+          cat > deploy/.env <<EOF
+          NEXUS_DOMAIN=localhost
+          ACME_EMAIL=ci@example.com
+          NEXUS_PUBLIC_API_URL=http://backend:8000
+          NEXUS_ALLOW_PUBLIC_SIGNUP=true
+          NEXUS_INTEGRATION_ALLOWED_HOSTS=mock-services
+          POSTGRES_PASSWORD=$(openssl rand -hex 24)
+          REDIS_PASSWORD=$(openssl rand -hex 24)
+          NEXUS_JWT_SECRET=$(openssl rand -hex 32)
+          NEXUS_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+          EOF
+      - name: Build images
+        run: docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml build
+      - name: Deploy with deploy.sh (health checked through Caddy over HTTPS)
+        env:
+          DEPLOY_SKIP_PULL: "1"
+          DEPLOY_CURL_OPTS: "-k"
+          DEPLOY_PROFILES: demo
+        run: bash deploy/deploy.sh ci
+      - name: Only Caddy is exposed; HTTP redirects to HTTPS
+        run: |
+          curl -fsS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://localhost/ | grep -q '^308 https://localhost/'
+          # (`! cmd` never fails a step under `set -e`, hence the explicit ifs.)
+          for port in 8000 8080 5432 6379; do
+            if curl -sS --max-time 3 "http://localhost:$port/" >/dev/null 2>&1; then
+              echo "port $port should not be reachable"; exit 1
+            fi
+          done
+          headers="$(curl -ksSI https://localhost/)"
+          echo "$headers"
+          echo "$headers" | grep -qi '^strict-transport-security: max-age=31536000'
+          echo "$headers" | grep -qi "^content-security-policy: default-src 'self'"
+          if echo "$headers" | grep -qi '^server:'; then echo "Server header leaked"; exit 1; fi
+      - name: End-to-end smoke test over HTTPS
+        env:
+          SMOKE_INSECURE_TLS: "1"
+        run: python3 scripts/smoke_test.py https://localhost
+      - name: Broken release is rolled back automatically
+        env:
+          DEPLOY_SKIP_PULL: "1"
+          DEPLOY_CURL_OPTS: "-k"
+          DEPLOY_PROFILES: demo
+          HEALTH_TIMEOUT_SECONDS: "60"
+        run: |
+          # Images tagged "broken" don't exist, so the release can't start.
+          set +e
+          bash deploy/deploy.sh 0000000broken
+          code=$?
+          set -e
+          test "$code" -eq 1
+          test "$(cat deploy/.deployed-tag)" = ci
+          curl -kfsS https://localhost/api/v1/health/ready
+      - name: Trivy image scan (fail on fixable CRITICAL, report HIGH)
+        run: |
+          for image in ghcr.io/nexusai/nexusai-backend:ci ghcr.io/nexusai/nexusai-frontend:ci; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 \
+              image --quiet --ignore-unfixed --severity CRITICAL --exit-code 1 "$image"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.1 \
+              image --quiet --ignore-unfixed --severity HIGH --exit-code 0 "$image"
+          done
+      - name: OWASP ZAP baseline scan
+        run: |
+          mkdir -p zap && cp deploy/zap-rules.tsv zap/ && chmod -R 777 zap
+          # -I: warnings are reported, only the rules marked FAIL in zap-rules.tsv fail the job.
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t https://localhost -c zap-rules.tsv -I -r zap-report.html
+      - name: Upload ZAP report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap/zap-report.html
+          if-no-files-found: ignore
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml --profile demo logs
+      - name: Stop stack
+        if: always()
+        run: docker compose --env-file deploy/.env -f deploy/docker-compose.prod.yml --profile demo down -v
+
+  kubernetes:
+    # Deploy to a real (kind) cluster with the restricted Pod Security Standard, run the
+    # smoke test, prove the network policies are enforced, and roll back a bad release.
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images
+        run: |
+          docker build -t nexusai-backend:ci backend
+          docker build -t nexusai-frontend:ci frontend
+      - uses: helm/kind-action@v1
+        with:
+          version: v0.27.0
+          cluster_name: nexusai
+      - name: Deploy
+        run: |
+          kind load docker-image nexusai-backend:ci nexusai-frontend:ci --name nexusai
+          kubectl apply -k deploy/k8s/overlays/kind
+          kubectl -n nexusai wait --for=condition=complete job/nexusai-migrate --timeout=300s
+          for d in backend worker frontend mock-services redis; do
+            kubectl -n nexusai rollout status deployment/$d --timeout=300s
+          done
+      - name: Smoke test through the frontend service
+        run: |
+          kubectl -n nexusai port-forward svc/frontend 8080:80 >/tmp/pf-frontend.log 2>&1 &
+          kubectl -n nexusai port-forward svc/mock-services 9000:9000 >/tmp/pf-mock.log 2>&1 &
+          for _ in $(seq 1 30); do curl -fsS http://localhost:8080/api/v1/health/ready && break; sleep 2; done
+          python3 scripts/smoke_test.py http://localhost:8080
+      - name: Network policies are enforced
+        run: bash deploy/k8s/tests/check-network-policies.sh
+      - name: Bad release never takes the API down, then is rolled back
+        run: |
+          kubectl -n nexusai set image deployment/backend backend=nexusai-backend:does-not-exist
+          if kubectl -n nexusai rollout status deployment/backend --timeout=60s; then
+            echo "a release with a missing image must not become ready"; exit 1
+          fi
+          # maxUnavailable 0: the old pods keep serving while the new one can't start.
+          curl -fsS http://localhost:8080/api/v1/health/ready
+          kubectl -n nexusai rollout undo deployment/backend
+          kubectl -n nexusai rollout status deployment/backend --timeout=180s
+          image="$(kubectl -n nexusai get deployment backend -o jsonpath='{.spec.template.spec.containers[0].image}')"
+          test "$image" = nexusai-backend:ci
+          curl -fsS http://localhost:8080/api/v1/health/ready
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n nexusai get pods,events -o wide || true
+          kubectl -n nexusai describe pods || true
+          kubectl -n nexusai logs -l app.kubernetes.io/name=nexusai --all-containers --tail=100 || true

@@ -1,0 +1,71 @@
+# Data stores accept connections only from pods running the backend image.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: data-stores
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [postgres, redis]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [backend, worker, migrate]
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 6379 }
+---
+# Mock systems: the API calls them, and the mock ServiceNow calls the API's webhook.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mock-services
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: mock-services
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+      ports:
+        - { protocol: TCP, port: 9000 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-and-mock-services
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: backend
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: mock-services
+      ports:
+        - { protocol: TCP, port: 8000 }
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: mock-services
+      ports:
+        - { protocol: TCP, port: 9000 }

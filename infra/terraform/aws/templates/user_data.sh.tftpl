@@ -1,0 +1,112 @@
+#!/bin/bash
+# First-boot setup of the NexusAI server (rendered by Terraform; contains no secrets).
+# Terraform fills in the single-dollar placeholders; shell variables in braces use a doubled dollar sign.
+set -euo pipefail
+exec > >(tee -a /var/log/nexusai-bootstrap.log) 2>&1
+echo "nexusai bootstrap started $(date -u)"
+
+# --- 1. Data volume (survives instance replacement) -------------------------------
+# On Nitro instances EBS volumes appear as NVMe devices named after the volume ID.
+DEVICE="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${replace(data_volume_id, "-", "")}"
+for _ in $(seq 1 60); do [ -e "$DEVICE" ] && break; sleep 5; done
+[ -e "$DEVICE" ] || { echo "data volume never appeared" >&2; exit 1; }
+blkid "$DEVICE" >/dev/null || mkfs.xfs -L nexusai-data "$DEVICE"
+UUID="$(blkid -s UUID -o value "$DEVICE")"
+mkdir -p /srv/data
+grep -q "$UUID" /etc/fstab || echo "UUID=$UUID /srv/data xfs defaults,nofail 0 2" >> /etc/fstab
+mount -a
+
+# Swap helps the 2 GiB instance during image pulls and document parsing.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  chmod 600 /swapfile && mkswap /swapfile && echo "/swapfile none swap sw 0 0" >> /etc/fstab
+fi
+swapon -a
+
+# --- 2. Docker, with its data on the data volume -----------------------------------
+dnf install -y -q docker git
+mkdir -p /etc/docker /srv/data/docker
+cat > /etc/docker/daemon.json <<'JSON'
+{ "data-root": "/srv/data/docker", "live-restore": true,
+  "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "5" } }
+JSON
+systemctl enable --now docker
+
+PLUGIN=/usr/local/lib/docker/cli-plugins/docker-compose
+mkdir -p "$(dirname "$PLUGIN")"
+curl -fsSL -o "$PLUGIN" "https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-x86_64"
+echo "${compose_sha256}  $PLUGIN" | sha256sum -c -
+chmod 755 "$PLUGIN"
+
+# --- 3. Code checkout (on the data volume) and non-secret settings -----------------
+if [ ! -d /srv/data/nexusai/.git ]; then
+  git clone --quiet --branch "${git_ref}" "${repo_url}" /srv/data/nexusai
+fi
+ln -sfn /srv/data/nexusai /opt/nexusai
+
+mkdir -p /etc/nexusai
+cat > /etc/nexusai/settings.env <<'ENV'
+NEXUS_DOMAIN=${domain_name}
+ACME_EMAIL=${acme_email}
+NEXUS_PUBLIC_API_URL=https://${domain_name}
+NEXUS_IMAGE_REGISTRY=${image_registry}
+NEXUS_ALLOW_PUBLIC_SIGNUP=${allow_public_signup}
+ENV
+
+# --- 4. The deploy command (used now and by the GitHub Actions deploy workflow) ----
+cat > /usr/local/bin/nexusai-deploy <<'SCRIPT'
+#!/bin/bash
+# nexusai-deploy <git-commit-sha>: check out that commit, write deploy/.env from
+# Secrets Manager, then run deploy/deploy.sh (health check + automatic rollback).
+set -euo pipefail
+TAG="$${1:-}"
+if [[ ! "$TAG" =~ ^[0-9a-f]{7,40}$ ]]; then
+  echo "usage: nexusai-deploy <git-commit-sha>" >&2
+  exit 64
+fi
+export AWS_DEFAULT_REGION="${region}"
+cd /opt/nexusai
+git fetch --quiet origin
+git checkout --quiet --detach "$TAG"
+
+umask 077
+aws secretsmanager get-secret-value --secret-id "${secret_arn}" \
+    --query SecretString --output text |
+  python3 -c 'import json, sys; [print(f"{k}={v}") for k, v in sorted(json.load(sys.stdin).items())]' \
+    > deploy/.env.new
+cat /etc/nexusai/settings.env >> deploy/.env.new
+mv deploy/.env.new deploy/.env
+exec bash deploy/deploy.sh "$TAG"
+SCRIPT
+chmod 755 /usr/local/bin/nexusai-deploy
+
+# --- 5. Nightly backups to S3 (02:00 India time) -----------------------------------
+cat > /etc/systemd/system/nexusai-backup.service <<'UNIT'
+[Unit]
+Description=NexusAI backup (PostgreSQL dump + uploads) to S3
+After=docker.service
+
+[Service]
+Type=oneshot
+Environment=AWS_DEFAULT_REGION=${region}
+ExecStart=/bin/bash /opt/nexusai/deploy/backup.sh s3://${backup_bucket}
+UNIT
+cat > /etc/systemd/system/nexusai-backup.timer <<'UNIT'
+[Unit]
+Description=Nightly NexusAI backup
+
+[Timer]
+OnCalendar=*-*-* 20:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now nexusai-backup.timer
+
+# --- 6. Start the release that was running before (replaced server) or the first one
+RELEASE="$(cat /opt/nexusai/deploy/.deployed-tag 2>/dev/null || echo "${image_tag}")"
+/usr/local/bin/nexusai-deploy "$RELEASE"
+echo "nexusai bootstrap finished $(date -u)"

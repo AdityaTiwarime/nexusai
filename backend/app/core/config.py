@@ -151,6 +151,9 @@ class Settings(BaseSettings):
                 raise ValueError("NEXUS_COOKIE_SECURE must be true in staging/production")
             if self.encryption_key.get_secret_value() == DEV_ENCRYPTION_KEY:
                 raise ValueError("Set NEXUS_ENCRYPTION_KEY to a generated Fernet key")
+            # docker compose's local default; a real deployment generates one (Terraform does).
+            if self.database_url.hosts()[0].get("password") in (None, "", "nexus"):
+                raise ValueError("Set a real database password in NEXUS_DATABASE_URL")
         return self
 
     @field_validator("database_url")

@@ -4,7 +4,7 @@
 
 **Enterprise Intelligence & Autonomous Workflow Platform.** A portfolio implementation of the kind of system a Forward Deployed Engineer builds: it connects scattered company knowledge, business applications and workflows into one secure, AI-powered platform with cited answers, approval-gated AI agents and full observability.
 
-> **Status: Phases 1–6 of 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence; RAG engine and AI Chat; AI agents with human approval; integrations). This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
+> **Status: Phases 1–6 and the first part of Phase 10 complete** (foundation; authentication, roles and multi-tenancy; document intelligence; RAG engine and AI Chat; AI agents with human approval; integrations; cloud deployment and security hardening). Phases 7–9 (events, observability, incident investigation) are next. This README only describes what is actually built and tested. See [`docs/roadmap.md`](docs/roadmap.md) for the plan and live feature status.
 
 | Integrations: health and call log | Agent run across ServiceNow, Salesforce and email |
 |---|---|
@@ -31,6 +31,14 @@ A 5,000-person company keeps knowledge in documents, a CRM, a ticketing system a
 All data is synthetic. No real customer data or credentials are used.
 
 ## What works today
+
+**Phase 10 (part 1): cloud deployment and security hardening**
+
+- **AWS with Terraform**: VPC, a hardened EC2 server (no SSH, IMDSv2 with hop limit 1, encrypted disks, separate data volume), generated secrets in Secrets Manager with KMS, least-privilege IAM, private TLS-only S3 backups, and a GitHub OIDC deploy role with no stored AWS keys. **Tested with mocked AWS providers (`tofu test`) and Checkov; not applied to a real AWS account.**
+- **Production stack**: Caddy with automatic HTTPS and HSTS, strict Content-Security-Policy, read-only non-root containers, no published database or API ports, and the database and Redis on an internal-only network.
+- **CI/CD with automatic rollback**: images published per commit; `deploy.sh` health-checks each release through HTTPS and goes back to the previous one if it isn't healthy (tested for real in CI).
+- **Kubernetes**: Kustomize manifests deployed to a **kind** cluster in CI under the restricted Pod Security Standard, with **network policies proven to be enforced** and a bad release rolled back.
+- **Security scans in CI**: Trivy (images), OWASP ZAP baseline (headers), Checkov (Terraform and Kubernetes), shellcheck, plus the existing pip-audit and npm audit. Threat model: [`docs/threat-model.md`](docs/threat-model.md). Details: [`docs/deployment.md`](docs/deployment.md).
 
 **Phase 6: integrations**
 
@@ -110,14 +118,14 @@ Full diagrams, component responsibilities and design decisions: [`docs/architect
 
 ## Tech stack
 
-| Layer | Now (Phase 6) | Planned |
+| Layer | Now (Phase 10, part 1) | Planned |
 |---|---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, React Router, TanStack Query | — |
 | Backend | Python 3.13, FastAPI, Pydantic, SQLAlchemy 2 (async), Alembic, PyJWT, Argon2, pypdf, python-docx, httpx, LangGraph, cryptography (Fernet); background worker; hybrid RAG with an OpenAI-compatible LLM client; connector framework | Kafka event log |
 | Data | PostgreSQL 16 + pgvector, Redis | Kafka |
-| Infra | Docker, Docker Compose, GitHub Actions | AWS, Terraform (if deployed) |
+| Infra | Docker, Docker Compose, Caddy, GitHub Actions; Terraform/OpenTofu for AWS (EC2, VPC, IAM, KMS, Secrets Manager, S3, SSM; mock-tested); Kubernetes (Kustomize, kind in CI) | Real AWS deployment, managed database (RDS) |
 | Observability | Structured logs, request IDs | OpenTelemetry, Prometheus, Grafana |
-| Testing | pytest, Vitest, Testing Library | Playwright, Locust |
+| Testing | pytest, Vitest, Testing Library, `tofu test`, kubeconform, Checkov, Trivy, OWASP ZAP, shellcheck | Playwright, Locust |
 
 ## Quick start (Docker)
 
@@ -176,6 +184,10 @@ pytest -v
 # Frontend
 cd frontend
 npm test
+
+# Deploy scripts, Terraform (mocked AWS, no credentials) - see docs/testing.md
+pytest deploy/tests
+cd infra/terraform/aws && tofu init -backend=false && tofu test
 ```
 
 ## API overview
@@ -245,6 +257,8 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 - [`docs/integrations-design.md`](docs/integrations-design.md): connectors, retries, idempotency, credentials, webhooks, honest limits
 - [`docs/agents-design.md`](docs/agents-design.md): agent workflow, tools, planners, approval rules, reliability
 - [`docs/ai-design.md`](docs/ai-design.md): ingestion, retrieval, answers with citations, prompt-injection handling, evaluation results, limitations
+- [`docs/deployment.md`](docs/deployment.md): AWS (Terraform), production stack, CI/CD with rollback, backups, Kubernetes, what CI verifies, honest limits
+- [`docs/threat-model.md`](docs/threat-model.md): STRIDE threat model across all trust boundaries, residual risks
 - [`docs/operations.md`](docs/operations.md): services, worker, queries, troubleshooting
 - [`docs/testing.md`](docs/testing.md): test strategy and actual results
 
@@ -253,10 +267,11 @@ All backend settings are environment variables with the `NEXUS_` prefix, validat
 ```
 nexusai/
 ├── backend/            FastAPI app (+ mock enterprise services), Alembic migrations, tests
-├── frontend/           React + TypeScript app, nginx config
-├── infra/              Postgres init scripts (observability config in later phases)
+├── frontend/           React + TypeScript app, nginx config (security headers)
+├── deploy/             Production compose, Caddyfile, deploy/rollback + backup scripts, Kubernetes manifests
+├── infra/              Postgres init scripts, Terraform for AWS (infra/terraform/aws)
 ├── scripts/            End-to-end smoke test used by CI
 ├── docs/               Architecture, roadmap, security, database design, testing
-├── .github/workflows/  CI pipeline
+├── .github/workflows/  CI pipeline, publish-and-deploy workflow
 └── docker-compose.yml
 ```

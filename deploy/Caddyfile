@@ -1,0 +1,27 @@
+# HTTPS entry point for a single-server deployment.
+# With a real domain, Caddy gets and renews a Let's Encrypt certificate automatically.
+# With NEXUS_DOMAIN=localhost (CI), it uses its own local certificate authority.
+{
+	email {$ACME_EMAIL}
+}
+
+{$NEXUS_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		# Browsers only use HTTPS for this site from now on (one year).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Don't advertise server software (applied after the upstream's headers).
+		-Server
+		defer
+	}
+
+	# Caddy replaces any client-supplied X-Forwarded-For with the real client IP, so
+	# rate limits and audit logs can't be fooled by a forged header.
+	reverse_proxy {$CADDY_UPSTREAM:frontend:8080}
+
+	log {
+		output stdout
+		format json
+	}
+}

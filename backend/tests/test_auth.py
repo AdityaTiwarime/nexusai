@@ -255,5 +255,6 @@ def test_production_accepts_a_strong_secret():
         jwt_secret="x" * 40,
         cookie_secure=True,
         encryption_key="cHJvZC10ZXN0LWtleS1ub3QtdGhlLWRldi1vbmUtMTI=",
+        database_url="postgresql+asyncpg://nexus:a-generated-password@db:5432/nexusai",
     )
     assert settings.is_production

@@ -1,0 +1,26 @@
+# NexusAI on Kubernetes: the application only. Overlays add the namespace, images,
+# secrets and data stores:
+#   overlays/kind        - local/CI cluster with in-cluster PostgreSQL, Redis, mock systems
+#   overlays/production  - example for a managed cluster (RDS, ElastiCache, ingress + TLS)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: nexusai
+    includeSelectors: false
+
+resources:
+  - serviceaccount.yaml
+  - config.yaml
+  - uploads-pvc.yaml
+  - migrate-job.yaml
+  - backend.yaml
+  - worker.yaml
+  - frontend.yaml
+  - network-policies.yaml
+  - availability.yaml
+
+images:
+  - name: nexusai-backend
+  - name: nexusai-frontend

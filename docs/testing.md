@@ -11,8 +11,12 @@
 | Rate limiting | pytest | A **real Redis** (`NEXUS_TEST_REDIS_URL`), plus an unreachable one for fail-open |
 | Full stack | Docker Compose in CI | db + redis + backend + worker + frontend, health-checked, plus `scripts/smoke_test.py` (register → upload → worker → chunks through nginx) |
 | Browser end-to-end | Playwright (run manually, see below) | Live backend + frontend + PostgreSQL |
+| Terraform | `tofu test` with **mocked AWS providers**, `tofu validate`, Checkov | No AWS account needed; security rules asserted on the planned resources |
+| Deploy and backup scripts | pytest with fake `docker`, `curl` and `aws` | `deploy/tests`; plus the real scripts in the CI `production-stack` job |
+| Production stack | GitHub Actions | Caddy HTTPS stack started by `deploy.sh`, smoke test over HTTPS, forced rollback, Trivy, OWASP ZAP |
+| Kubernetes | kubeconform + Checkov (rendered manifests); **kind** in CI | Real cluster: rollout, smoke test, network-policy enforcement probes, rollback |
 
-Later phases add automated Playwright end-to-end tests in CI and Locust load tests (Phase 10).
+Still to come: automated Playwright tests in CI and Locust load tests.
 
 ## Commands
 
@@ -26,6 +30,15 @@ export NEXUS_TEST_REDIS_URL=redis://localhost:6379/15   # db 15 is flushed by th
 pytest -v
 ruff check . && ruff format --check .
 
+# Deploy scripts (no Docker or AWS needed)
+pip install pytest && pytest deploy/tests
+
+# Terraform (OpenTofu or Terraform >= 1.6; no AWS credentials needed)
+cd infra/terraform/aws && tofu init -backend=false && tofu validate && tofu test
+
+# Kubernetes manifests
+kubectl kustomize deploy/k8s/overlays/kind | kubeconform -strict -summary
+
 # Frontend
 cd frontend
 npm ci
@@ -36,17 +49,18 @@ npm run build
 
 ## Results (actual runs)
 
-Latest run: 24 Nov 2026, Linux, Python 3.13, Node 22, PostgreSQL 16. GitHub Actions runs the same suites (plus the Docker stack check) on every push.
+Latest run: 25 Nov 2026, Linux, Python 3.13, Node 22, PostgreSQL 16. GitHub Actions runs the same suites (plus the Docker stack, production stack and Kubernetes checks) on every push.
 
-### Backend: 239 passed
+### Backend: 249 passed
 
 | File | Tests | What it proves |
 |---|---|---|
 | `test_auth.py` | 22 | Registration creates an org admin and sets an **httpOnly, SameSite=Strict, path-scoped** refresh cookie; duplicate emails rejected (case-insensitive); duplicate org names get unique slugs; weak passwords rejected; public sign-up can be disabled; login is case-insensitive; **wrong password and unknown email return identical responses**; failed logins are audited; requests without a token, with a **tampered** token, a token **signed with another key**, an **expired** token or an **`alg: none`** token are all rejected; refresh **rotates** the token; **replaying an old refresh token revokes the whole session** and is audited; logout revokes the session; production refuses the dev JWT secret and insecure cookies |
 | `test_rbac_and_tenancy.py` | 16 | **Tenant isolation**: user lists only show your organization; another org's user by ID returns **404** for both read and update; audit logs are org-scoped; an `organization_id` in the request body is ignored. **RBAC**: employee/manager/org-admin permissions; role changes and deactivation take effect **immediately on existing tokens**; admins can't demote or disable themselves; `super_admin` can't be assigned via the API; user changes are audited with before/after values and request ID; the super admin sees all orgs but no tenant data; org admins can't use platform endpoints |
-| `test_config.py` | 10 | Non-async DB drivers rejected; settings load from plain env vars exactly as Docker passes them; production disables API docs; **production refuses the dev encryption key**; encryption key format; allowed hosts from env |
+| `test_config.py` | 12 | Non-async DB drivers rejected; settings load from plain env vars exactly as Docker passes them; production disables API docs; **production refuses the dev encryption key and the default (or an empty) database password**; encryption key format; allowed hosts from env |
 | `test_health.py` | 5 | Liveness/readiness, 503 on DB outage without leaking credentials or hosts; system info reports the answer and embedding providers |
-| `test_middleware.py` | 6 | Request IDs, safe 500 responses, CORS allow/deny |
+| `test_middleware.py` | 7 | Request IDs, safe 500 responses, CORS allow/deny, **`Cache-Control: no-store` and `nosniff` on API responses** |
+| `test_schema_check.py` | 7 | The Kubernetes init-container check: the schema counts as ready at head, **pending** before migrations or at an older revision (with a timeout), **accepted when newer** (rollback onto a backward-compatible schema), and an unreachable database counts as pending |
 | `test_migrations.py` | 3 | Upgrade/downgrade/re-upgrade (including the pgvector, chat and agent tables), a single head, and models match migrations |
 | `test_parsing_and_chunking.py` | 23 | Disallowed extensions, empty and oversized files, **content that doesn't match its extension**, non-Word zips and a **DOCX zip bomb** are rejected; PDF text keeps **page numbers** and metadata; image-only and corrupt PDFs fail with a clear reason; DOCX paragraphs and tables; CSV rows become self-describing lines; BOM and Windows-1252 text; chunks respect the size limit, **overlap** with the previous chunk, **lose no text**, hard-split very long lines, track page ranges and drop NUL bytes |
 | `test_embeddings.py` | 12 | Hashing embedder is deterministic, unit-length and reflects word overlap; OpenAI provider (against a **mocked HTTP API**, no real calls) sends the right request, re-orders results, classifies 429/5xx/timeouts as retryable and 400/401/bad dimensions as permanent; provider chosen by configuration; the OpenAI provider requires a key |
@@ -75,6 +89,29 @@ Plus `tsc` type check, production build, and `npm audit` (production dependencie
 | `integrations.test.tsx` | 6 | Connection health, masked credentials, webhook URL and the call log (attempts, errors); connecting with the bundled mock values sends the right payload and shows the webhook secret once; the server's refusal (e.g. host not allowed) is shown; admins can test a failing connection; read-only for managers; agent runs link the ServiceNow incident and show the Salesforce customer |
 | `chat.test.tsx` | 7 | AI Chat: asking (Enter to send) shows the cited answer, **both the [1] marker and the source card link to the exact chunk**, offline-mode label and latency; follow-ups send the conversation ID; "no evidence" answers are clearly marked; **restricted sources show as unavailable without links**; provider errors show the API's message. Search: ranked passages with keyword badge, score, highlights and chunk links; empty results message |
 
+
+### Phase 10: deployment and security checks
+
+| Check | Result |
+|---|---|
+| `tofu test` (OpenTofu 1.9.1, mocked AWS 5.80 and random providers) | **9 passed**: only 80/443 open, outbound 443 only, empty default SG, IMDSv2 with hop limit 1, encrypted disks, no public IP except the EIP, **no secret in user data**, Fernet key conversion, no wildcard IAM actions, one readable secret, write-only backups, private TLS-only KMS bucket, no deploy role without a repo, deploy role scoped to one repo environment and one instance, invalid image tag and domain rejected. A test was confirmed to fail when the hop limit was changed to 2 |
+| `tofu validate`, `tofu fmt -check` | clean |
+| Checkov, Terraform | 106 passed, 0 failed, 7 skipped (each with a written reason) |
+| Checkov, rendered Kubernetes manifests | 937 passed, 0 failed, 1 skipped (+5 check IDs skipped in CI with reasons) |
+| kubeconform `-strict`, Kubernetes 1.31 | kind overlay 28/28 valid, production overlay 19/19 valid |
+| shellcheck | `deploy.sh`, `backup.sh`, the network-policy probe, the **rendered EC2 boot script** and the embedded `nexusai-deploy` command: clean |
+| actionlint | both workflows clean |
+| `deploy/tests` | **9 passed**: healthy deploy remembered; health checked through the real domain via Caddy; **unhealthy release rolled back**; failed pull rolled back without restarting; first release with nothing to roll back to; unhealthy rollback exits 2; backup streams the dump and uploads to S3; **a failed dump fails the backup and deletes the partial object** |
+| `nexusai-deploy` (rendered) | rejects `abc; rm -rf /` with exit 64 |
+| Docker Compose production file | `docker compose config` valid; refuses to start without the required secrets |
+
+**Local HTTPS run.** The production Caddyfile was run with the real Caddy 2.8.4 binary (`NEXUS_DOMAIN=localhost`) in front of the frontend's nginx configuration (nginx 1.24) and the live API, worker and mock services:
+
+- `http://localhost/` → **308** to `https://localhost/`. The HTTPS response had HSTS, the full CSP, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, COOP and **no `Server` header**. API responses had `Cache-Control: no-store`.
+- `scripts/smoke_test.py https://localhost` passed **end to end over HTTPS**: upload → worker → cited answer → refusal → approved agent run → ServiceNow/Salesforce/email → signed webhook resolved the ticket.
+- Playwright signed in and opened every page under the strict CSP with **0 CSP violations and 0 page errors**.
+
+Not run locally (no Docker daemon or kind in this environment): the production containers themselves, Trivy, ZAP and the kind cluster. Those run in GitHub Actions (`production-stack` and `kubernetes` jobs).
 
 ### Phase 6 end-to-end (live API + worker + Redis + PostgreSQL + mock services)
 

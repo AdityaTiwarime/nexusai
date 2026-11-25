@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nexusai
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 25m
+    # ingress-nginx adds HSTS to TLS hosts by default; the app's own security headers
+    # (CSP etc.) come from the frontend's nginx.
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [nexusai.example.com]
+      secretName: nexusai-tls
+  rules:
+    - host: nexusai.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http

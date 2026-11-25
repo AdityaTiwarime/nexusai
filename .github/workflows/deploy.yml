@@ -1,0 +1,105 @@
+name: Deploy
+
+# After CI passes on main: publish the images to GitHub Container Registry, tagged with
+# the commit SHA, then (only when an AWS deployment is configured) deploy that SHA to
+# the EC2 server through AWS Systems Manager. No AWS keys are stored in GitHub: the job
+# exchanges its OIDC token for a short-lived role (infra/terraform/aws/github_oidc.tf).
+#
+# To enable the deploy job, set these repository variables (Settings -> Variables):
+#   AWS_DEPLOY_ROLE_ARN   output `deploy_role_arn` of the Terraform
+#   AWS_INSTANCE_ID       output `instance_id`
+#   AWS_REGION            e.g. ap-south-1
+# and create a GitHub environment named "production" (optionally with required reviewers).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA to deploy (images must already be published)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - id: meta
+        run: |
+          echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          echo "registry=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.meta.outputs.registry }}
+          SHA: ${{ steps.meta.outputs.sha }}
+        run: |
+          for app in backend frontend; do
+            docker build -t "$REGISTRY/nexusai-$app:$SHA" -t "$REGISTRY/nexusai-$app:main" "$app"
+            docker push "$REGISTRY/nexusai-$app:$SHA"
+            docker push "$REGISTRY/nexusai-$app:main"
+          done
+
+  deploy:
+    needs: [publish]
+    # Runs after a publish, or manually; skipped until the AWS variables are configured.
+    if: >-
+      always() && vars.AWS_DEPLOY_ROLE_ARN != '' &&
+      (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SHA: ${{ inputs.sha || needs.publish.outputs.sha }}
+      INSTANCE_ID: ${{ vars.AWS_INSTANCE_ID }}
+    steps:
+      - name: Validate the commit SHA
+        run: '[[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]] || { echo "not a commit SHA: $SHA"; exit 1; }'
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Run nexusai-deploy on the server (health check + automatic rollback)
+        run: |
+          command_id="$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy $SHA" \
+            --parameters "commands=[\"/usr/local/bin/nexusai-deploy $SHA\"],executionTimeout=[\"900\"]" \
+            --query Command.CommandId --output text)"
+          echo "SSM command $command_id"
+          status=Pending
+          for _ in $(seq 1 120); do
+            sleep 10
+            status="$(aws ssm get-command-invocation --command-id "$command_id" \
+              --instance-id "$INSTANCE_ID" --query Status --output text 2>/dev/null || echo Pending)"
+            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query '[StandardOutputContent, StandardErrorContent]' --output text || true
+          echo "status: $status"
+          test "$status" = Success

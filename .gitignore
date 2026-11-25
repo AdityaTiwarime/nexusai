@@ -27,3 +27,13 @@ backend/data/
 
 # Redis snapshots from local runs
 *.rdb
+
+# Phase 10: deployment
+deploy/.env
+deploy/.env.new
+deploy/.deployed-tag
+infra/terraform/**/.terraform/
+infra/terraform/**/.terraform.lock.hcl
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.*
+infra/terraform/**/terraform.tfvars

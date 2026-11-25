@@ -1,4 +1,4 @@
-"""Request ID + access-log middleware.
+"""Request ID, baseline security headers and access-log middleware.
 
 Each request gets an ID (reused from the incoming X-Request-ID header when it is
 a safe value, otherwise generated). The ID is stored in a context variable for
@@ -52,6 +52,13 @@ class RequestContextMiddleware:
                 status_code = message["status"]
                 headers = list(message.get("headers", []))
                 headers.append((REQUEST_ID_HEADER.encode(), request_id.encode()))
+                # API responses carry tokens and tenant data: never cache them, and stop
+                # browsers from guessing a different content type.
+                names = {name.lower() for name, _ in headers}
+                if b"cache-control" not in names:
+                    headers.append((b"cache-control", b"no-store"))
+                if b"x-content-type-options" not in names:
+                    headers.append((b"x-content-type-options", b"nosniff"))
                 message["headers"] = headers
             await send(message)
 

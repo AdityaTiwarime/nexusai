@@ -1,6 +1,6 @@
 # Security
 
-This document describes how NexusAI authenticates users, authorizes actions and isolates tenants, which threats it addresses, and what is **not** covered yet. Everything listed as a control is implemented and tested; tests are referenced in [`testing.md`](testing.md).
+This document describes how NexusAI authenticates users, authorizes actions and isolates tenants, which threats it addresses, and what is **not** covered yet. Everything listed as a control is implemented and tested; tests are referenced in [`testing.md`](testing.md). The full STRIDE threat model, including the cloud deployment, is in [`threat-model.md`](threat-model.md); infrastructure controls are in [`deployment.md`](deployment.md).
 
 ## Authentication
 
@@ -66,16 +66,30 @@ Backed by Redis, so limits hold across several API replicas.
 
 Responses are `429` with `Retry-After`. IPs and emails are stored in Redis only as SHA-256 hashes. If Redis is unreachable the limiter **fails open** (requests allowed, warning logged): availability of login is preferred, and Argon2id still makes guessing slow. Trade-off: the per-account limit lets an attacker temporarily lock a known email out; the window is short (15 minutes) and this is the standard compromise.
 
-Behind the bundled nginx, the API trusts `X-Forwarded-For` (`FORWARDED_ALLOW_IPS` in `docker-compose.yml`) so limits apply to real client IPs. That's only safe while the backend port isn't exposed to the internet directly.
+Behind the bundled nginx, the API trusts `X-Forwarded-For` (`FORWARDED_ALLOW_IPS`) so limits apply to real client IPs. In the production stack, Caddy replaces any client-supplied `X-Forwarded-For` with the real address and the API has no published port, so the header can't be forged. In the development compose file the backend port is published, so don't expose it to the internet.
 
 ## Configuration safety
 
 Startup **refuses to run in staging or production** if:
 
-- `NEXUS_JWT_SECRET` is the development default or shorter than 32 characters, or
-- `NEXUS_COOKIE_SECURE` is not `true` (the refresh cookie must only travel over HTTPS).
+- `NEXUS_JWT_SECRET` is the development default or shorter than 32 characters,
+- `NEXUS_COOKIE_SECURE` is not `true` (the refresh cookie must only travel over HTTPS),
+- `NEXUS_ENCRYPTION_KEY` is the development key, or
+- the database password is empty or the docker compose default (`nexus`).
 
 API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses never include stack traces, connection strings or internal messages.
+
+## HTTP security headers
+
+| Header | Set by | Value |
+|---|---|---|
+| `Content-Security-Policy` | frontend nginx | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'` |
+| `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy` | frontend nginx | `DENY`, `nosniff`, `strict-origin-when-cross-origin`, camera/microphone/geolocation/payment off, `same-origin` |
+| `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` | API (every response) | API responses contain tokens and tenant data |
+| `Strict-Transport-Security` | Caddy (production) | `max-age=31536000; includeSubDomains` |
+| `Server` | removed by Caddy | |
+
+The app loads nothing from other origins, so the CSP needs no exceptions. All pages were browsed under it with zero violations, and the ZAP baseline scan in CI fails if the CSP, clickjacking, HSTS or `nosniff` headers go missing.
 
 ## Threat model (current scope)
 
@@ -93,7 +107,7 @@ API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses 
 | Malicious uploads | Extension allow-list **and** content checks (magic bytes, DOCX structure, text decoding), size limit, DOCX zip-bomb guard. Files are stored under server-generated keys, never user file names (no path traversal). Downloads are always `application/octet-stream` + `Content-Disposition: attachment` + `nosniff`, so an uploaded file is never rendered by the browser. |
 | AI answers leaking restricted content | Retrieval filters by organization, role and status **inside the SQL query**, so restricted passages never reach the answer step (tested with an employee asking about an admin-only document). Old citations are re-checked on every read and hidden once a source is restricted or deleted. Conversations are private to their owner. |
 | Prompt injection through documents | Sources are wrapped in delimited blocks, attempts to close a block are neutralised, the system prompt treats sources as data, and output is validated in code (only real citations; an ungrounded answer becomes "no evidence"). The chat has no tools or actions, so an injection can at worst distort one answer. Not a complete defence; see `ai-design.md`. |
-| An AI agent doing something harmful | Agents can only use 3 registered tools with strict schemas (no SQL, shell or arbitrary HTTP). Anything that creates or sends needs a human approval of the exact actions. Plans from any planner are validated and rejected as a whole if they use an unknown tool or extra arguments (tested with a model proposing `DROP TABLE`). |
+| An AI agent doing something harmful | Agents can only use 4 registered tools with strict schemas (no SQL, shell or arbitrary HTTP). Anything that creates or sends needs a human approval of the exact actions. Plans from any planner are validated and rejected as a whole if they use an unknown tool or extra arguments (tested with a model proposing `DROP TABLE`). |
 | Approving your own risky request | Separation of duties: the requester can never approve or reject their own run, whatever their role; employees can't approve at all. |
 | Double execution (double click, two approvers) | Conditional `UPDATE … WHERE status = 'pending'` decision, plus unique (run, step) constraints on every created record (tested concurrently). |
 | SSRF through a configured integration URL | Base URLs must be http(s), without credentials, on a host in `NEXUS_INTEGRATION_ALLOWED_HOSTS`; redirects aren't followed (tested with cloud metadata IPs, internal hosts, look-alike domains). |
@@ -107,8 +121,8 @@ API docs (`/docs`, `/openapi.json`) are disabled in production. Error responses 
 
 | Limitation | Plan |
 |---|---|
-| No malware scanning of uploads | Add a ClamAV (or cloud) scan step in the worker before parsing (Phase 10). |
-| No email verification or password reset | Planned for Phase 10 (the email connector exists now, for agent emails). |
-| No MFA or SSO (OAuth2/OIDC) | Planned for Phase 10. |
+| No malware scanning of uploads | Add a ClamAV (or cloud) scan step in the worker before parsing (next part of Phase 10). |
+| No email verification or password reset | Next part of Phase 10 (the email connector exists now, for agent emails). |
+| No MFA or SSO (OAuth2/OIDC) | Next part of Phase 10. |
 | Admin sets the first password for new users | Replace with invite links once email is available. |
 | HS256 shared secret | Sufficient for a single service; move to RS256 with key rotation if other services need to verify tokens. |

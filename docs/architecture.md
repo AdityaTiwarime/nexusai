@@ -191,3 +191,13 @@ sequenceDiagram
 6. **Same-origin API in Docker.** nginx serves the built frontend and proxies `/api` to the backend, so the browser never needs CORS in the containerised setup. CORS is still configured for the Vite dev server.
 7. **Provider-agnostic AI layer.** Application code depends on an interface, not on one vendor's SDK; a deterministic offline provider keeps tests and demos runnable without API keys. Embeddings use it since Phase 3; chat models join in Phase 4.
 8. **PostgreSQL as the job queue, Redis for rate limits only (Phase 3).** Jobs are written in the same transaction as the upload, so work can't be lost or orphaned, and a Redis outage never stops ingestion or logins (the rate limiter fails open).
+9. **Infrastructure that can be verified without a cloud account (Phase 10).** Terraform is tested with mocked AWS providers, the production stack and the Kubernetes manifests run in CI (Docker and kind), and every security rule that matters (no SSH, IMDSv2 hop limit 1, no secrets in user data, least-privilege roles, enforced network policies) is an automated assertion rather than a sentence in a document.
+
+## Deployment view (Phase 10)
+
+| Target | Shape |
+|---|---|
+| Single AWS server | Caddy (HTTPS) → nginx frontend → API / worker → PostgreSQL / Redis on an internal network, all in Docker Compose on one EC2 instance with a separate encrypted data volume. Secrets from Secrets Manager, backups to S3, deploys through SSM from GitHub Actions (OIDC). |
+| Kubernetes | Same containers as Deployments, a migration Job, restricted Pod Security, default-deny network policies. In-cluster data stores for kind; RDS/ElastiCache/EFS assumed for production. |
+
+Diagrams, steps and limits: [`deployment.md`](deployment.md). Threats and mitigations: [`threat-model.md`](threat-model.md).

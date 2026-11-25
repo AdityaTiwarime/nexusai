@@ -1,0 +1,23 @@
+# Non-secret settings shared by the API, worker and migration job. Secrets (database
+# and Redis URLs with passwords, JWT secret, encryption key) come from the
+# `nexusai-secrets` Secret, created by the overlay or from AWS Secrets Manager.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nexusai-config
+data:
+  NEXUS_ENVIRONMENT: production
+  NEXUS_LOG_LEVEL: INFO
+  NEXUS_COOKIE_SECURE: "true"
+  NEXUS_ALLOW_PUBLIC_SIGNUP: "false"
+  NEXUS_STORAGE_DIR: /data/uploads
+  NEXUS_MAX_UPLOAD_MB: "20"
+  NEXUS_EMBEDDING_PROVIDER: hashing
+  NEXUS_ANSWER_PROVIDER: extractive
+  NEXUS_AGENT_PLANNER: rules
+  NEXUS_INTEGRATION_ALLOWED_HOSTS: ""
+  NEXUS_CORS_ORIGINS: https://nexusai.example.com
+  NEXUS_PUBLIC_API_URL: https://nexusai.example.com
+  # Only the frontend's nginx can reach the API (network policy), and the ingress in
+  # front of it sets X-Forwarded-For.
+  FORWARDED_ALLOW_IPS: "*"

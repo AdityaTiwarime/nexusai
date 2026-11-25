@@ -51,3 +51,9 @@ async def test_cors_rejects_unknown_origin(client):
         headers={"Origin": "http://evil.example", "Access-Control-Request-Method": "GET"},
     )
     assert "access-control-allow-origin" not in response.headers
+
+
+async def test_api_responses_are_not_cached_and_not_sniffed(client):
+    response = await client.get(f"{API}/health/live")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"

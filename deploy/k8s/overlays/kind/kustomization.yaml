@@ -1,0 +1,55 @@
+# Local / CI cluster (kind): everything in one namespace, including PostgreSQL, Redis
+# and the mock ServiceNow/Salesforce/email services. Used by the CI "kubernetes" job:
+#   kind load docker-image nexusai-backend:ci nexusai-frontend:ci
+#   kubectl apply -k deploy/k8s/overlays/kind
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: nexusai
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - postgres.yaml
+  - redis.yaml
+  - mock-services.yaml
+  - network-policies.yaml
+
+images:
+  - name: nexusai-backend
+    newName: nexusai-backend
+    newTag: ci
+  - name: nexusai-frontend
+    newName: nexusai-frontend
+    newTag: ci
+
+# Development values for a throwaway cluster only. Real deployments create this
+# Secret from AWS Secrets Manager (see the production overlay).
+secretGenerator:
+  - name: nexusai-secrets
+    literals:
+      - NEXUS_DATABASE_URL=postgresql+asyncpg://nexus:kind-only-db-password@postgres:5432/nexusai
+      - NEXUS_REDIS_URL=redis://:kind-only-redis-password@redis:6379/0
+      - NEXUS_JWT_SECRET=kind-only-jwt-secret-never-use-outside-a-test-cluster
+      - NEXUS_ENCRYPTION_KEY=a2luZC1vbmx5LWVuY3J5cHRpb24ta2V5LTEyMzQ1Njc=
+      - POSTGRES_PASSWORD=kind-only-db-password
+      - REDIS_PASSWORD=kind-only-redis-password
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: nexusai-config
+    patch: |-
+      - op: replace
+        path: /data/NEXUS_CORS_ORIGINS
+        value: http://localhost:8080
+      - op: replace
+        path: /data/NEXUS_PUBLIC_API_URL
+        value: http://backend:8000
+      - op: replace
+        path: /data/NEXUS_INTEGRATION_ALLOWED_HOSTS
+        value: mock-services
+      # The smoke test signs up a new organization.
+      - op: replace
+        path: /data/NEXUS_ALLOW_PUBLIC_SIGNUP
+        value: "true"

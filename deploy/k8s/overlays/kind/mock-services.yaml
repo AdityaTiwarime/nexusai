@@ -1,0 +1,63 @@
+# Simulated ServiceNow, Salesforce and email APIs (synthetic data) for the smoke test.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-services
+  labels:
+    app.kubernetes.io/name: nexusai
+    app.kubernetes.io/component: mock-services
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nexusai
+      app.kubernetes.io/component: mock-services
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nexusai
+        app.kubernetes.io/component: mock-services
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mock-services
+          image: nexusai-backend
+          command: ["uvicorn", "app.mock_services.main:app", "--host", "0.0.0.0", "--port", "9000"]
+          ports:
+            - { name: http, containerPort: 9000 }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 20m, memory: 96Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-services
+spec:
+  selector:
+    app.kubernetes.io/name: nexusai
+    app.kubernetes.io/component: mock-services
+  ports:
+    - { name: http, port: 9000, targetPort: http }

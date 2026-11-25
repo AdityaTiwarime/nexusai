@@ -1,0 +1,12 @@
+# Uploaded files, shared by the API (writes) and the worker (reads).
+# ReadWriteOnce works while all pods run on one node (kind). A multi-node production
+# cluster needs a ReadWriteMany class (e.g. Amazon EFS) - see the production overlay.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nexusai-uploads
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi

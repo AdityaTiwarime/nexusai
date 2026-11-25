@@ -66,7 +66,7 @@ Every tool has a strict argument schema (Pydantic, unknown fields forbidden). Ar
 - **Idempotent actions.** Tickets and outbox messages are unique per `(agent_run_id, step_index)`, so running a step twice returns the record from the first time.
 - **Retry.** A manager can retry a failed approved run. Completed steps aren't repeated, and `{{ticket_number}}` reuses the ticket from the first attempt (tested).
 - **Verification.** After execution, every created record is re-read from the database before the run is marked completed.
-- Ticket numbers are allocated under a row lock on the organization, so concurrent runs get unique, consecutive numbers.
+- Ticket numbers are allocated under a per-organization PostgreSQL advisory lock, so concurrent runs get unique, consecutive numbers.
 
 ## Known limitations
 

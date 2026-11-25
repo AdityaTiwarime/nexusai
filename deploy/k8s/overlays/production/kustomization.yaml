@@ -1,0 +1,60 @@
+# Example production overlay for a managed cluster (e.g. Amazon EKS). Not deployed by
+# this repository: CI renders and schema-checks it only. Assumes:
+#   - PostgreSQL with pgvector on Amazon RDS, Redis on Amazon ElastiCache
+#   - the `nexusai-secrets` Secret synced from AWS Secrets Manager (for example with the
+#     External Secrets Operator), holding NEXUS_DATABASE_URL, NEXUS_REDIS_URL,
+#     NEXUS_JWT_SECRET and NEXUS_ENCRYPTION_KEY
+#   - an NGINX ingress controller and cert-manager with a `letsencrypt` ClusterIssuer
+#   - a ReadWriteMany storage class for uploads (Amazon EFS: `efs-sc`)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: nexusai
+
+resources:
+  - namespace.yaml
+  - ../../base
+  - ingress.yaml
+
+images:
+  - name: nexusai-backend
+    newName: ghcr.io/your-github-user/nexusai-backend
+    newTag: replace-with-commit-sha
+  - name: nexusai-frontend
+    newName: ghcr.io/your-github-user/nexusai-frontend
+    newTag: replace-with-commit-sha
+
+replicas:
+  - name: backend
+    count: 3
+  - name: worker
+    count: 2
+  - name: frontend
+    count: 2
+
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: nexusai-uploads
+    patch: |-
+      - op: replace
+        path: /spec/accessModes
+        value: [ReadWriteMany]
+      - op: add
+        path: /spec/storageClassName
+        value: efs-sc
+  # Spread API pods over availability zones.
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: add
+        path: /spec/template/spec/topologySpreadConstraints
+        value:
+          - maxSkew: 1
+            topologyKey: topology.kubernetes.io/zone
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: nexusai
+                app.kubernetes.io/component: backend

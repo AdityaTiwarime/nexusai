@@ -1,6 +1,6 @@
 [project]
 name = "nexusai-backend"
-version = "0.6.0"
+version = "0.7.0"
 description = "NexusAI - Enterprise Intelligence & Autonomous Workflow Platform (backend)"
 requires-python = ">=3.12"
 dependencies = [

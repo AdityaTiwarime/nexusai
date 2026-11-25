@@ -1,0 +1,169 @@
+# Production stack for one server (the AWS EC2 instance from infra/terraform/aws).
+# Differences from the development docker-compose.yml:
+#   - prebuilt images by tag (pulled from the registry, so a rollback is just an older tag)
+#   - only Caddy is reachable from outside (80/443); database, Redis and API have no ports
+#   - the database and Redis sit on an internal network with no internet access
+#   - production settings: real secrets required, secure cookies, public sign-up off
+#   - the mock ServiceNow/Salesforce/email services only run with `--profile demo`
+#
+#   docker compose --env-file .env -f docker-compose.prod.yml up -d    (deploy.sh does this)
+name: nexusai
+
+x-backend-env: &backend-env
+  NEXUS_ENVIRONMENT: production
+  NEXUS_LOG_LEVEL: ${NEXUS_LOG_LEVEL:-INFO}
+  NEXUS_DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/nexusai
+  NEXUS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379/0
+  NEXUS_CORS_ORIGINS: https://${NEXUS_DOMAIN:?set NEXUS_DOMAIN}
+  NEXUS_JWT_SECRET: ${NEXUS_JWT_SECRET:?set NEXUS_JWT_SECRET}
+  NEXUS_ENCRYPTION_KEY: ${NEXUS_ENCRYPTION_KEY:?set NEXUS_ENCRYPTION_KEY}
+  NEXUS_COOKIE_SECURE: "true"
+  NEXUS_ALLOW_PUBLIC_SIGNUP: ${NEXUS_ALLOW_PUBLIC_SIGNUP:-false}
+  NEXUS_STORAGE_DIR: /data/uploads
+  NEXUS_MAX_UPLOAD_MB: ${NEXUS_MAX_UPLOAD_MB:-20}
+  NEXUS_EMBEDDING_PROVIDER: ${NEXUS_EMBEDDING_PROVIDER:-hashing}
+  NEXUS_EMBEDDING_MODEL: ${NEXUS_EMBEDDING_MODEL:-text-embedding-3-small}
+  NEXUS_OPENAI_API_KEY: ${NEXUS_OPENAI_API_KEY:-}
+  NEXUS_ANSWER_PROVIDER: ${NEXUS_ANSWER_PROVIDER:-extractive}
+  NEXUS_CHAT_MODEL: ${NEXUS_CHAT_MODEL:-gpt-4o-mini}
+  NEXUS_AGENT_PLANNER: ${NEXUS_AGENT_PLANNER:-rules}
+  NEXUS_INTEGRATION_ALLOWED_HOSTS: ${NEXUS_INTEGRATION_ALLOWED_HOSTS:-}
+  NEXUS_PUBLIC_API_URL: ${NEXUS_PUBLIC_API_URL:?set NEXUS_PUBLIC_API_URL}
+
+x-restart: &restart
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  caddy:
+    <<: *restart
+    image: caddy:2.8-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      NEXUS_DOMAIN: ${NEXUS_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  frontend:
+    <<: *restart
+    image: ${NEXUS_IMAGE_REGISTRY:-ghcr.io/nexusai}/nexusai-frontend:${NEXUS_IMAGE_TAG:?set NEXUS_IMAGE_TAG}
+    build: ../frontend
+    read_only: true
+    tmpfs: [/tmp, /var/cache/nginx]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks: [edge, app]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    <<: *restart
+    image: ${NEXUS_IMAGE_REGISTRY:-ghcr.io/nexusai}/nexusai-backend:${NEXUS_IMAGE_TAG}
+    build: ../backend
+    environment:
+      <<: *backend-env
+      # Only nginx (frontend) can reach the API; Caddy in front of it has already
+      # replaced any client-supplied X-Forwarded-For.
+      FORWARDED_ALLOW_IPS: "*"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - uploads:/data/uploads
+    networks: [app, data]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    <<: *restart
+    image: ${NEXUS_IMAGE_REGISTRY:-ghcr.io/nexusai}/nexusai-backend:${NEXUS_IMAGE_TAG}
+    command: ["python", "-m", "app.worker"]
+    environment:
+      <<: *backend-env
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - uploads:/data/uploads
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker", "--healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks: [app, data]
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  db:
+    <<: *restart
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: nexusai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexusai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [data]
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ["sh", "-c", 'exec redis-server --save "" --appendonly no --requirepass "$$REDIS_PASSWORD"']
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [data]
+
+  mock-services:
+    # Demo only: simulated ServiceNow, Salesforce and email APIs with synthetic data.
+    profiles: [demo]
+    image: ${NEXUS_IMAGE_REGISTRY:-ghcr.io/nexusai}/nexusai-backend:${NEXUS_IMAGE_TAG}
+    command: ["uvicorn", "app.mock_services.main:app", "--host", "0.0.0.0", "--port", "9000"]
+    read_only: true
+    tmpfs: [/tmp]
+    ports:
+      # Bound to the server itself only (for the smoke test), never public.
+      - "127.0.0.1:9000:9000"
+    networks: [app]
+
+networks:
+  edge: {}
+  app: {}
+  data:
+    # No route to the internet: the database and Redis can only talk to the API and worker.
+    internal: true
+
+volumes:
+  pgdata:
+  uploads:
+  caddy_data:
+  caddy_config:

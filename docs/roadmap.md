@@ -17,7 +17,7 @@ This document is the "before we write code" plan for NexusAI. It is kept up to d
 | Enterprise connectors | Medium | Built against **mock** Salesforce / ServiceNow / Microsoft Graph services with synthetic data. Real accounts are out of scope unless actually configured. |
 | Kafka | Medium | Justified only for the event log between ingestion, agents and audit. Redis queues cover simpler background jobs. Kafka is optional in local dev. |
 | Observability (OTel, Prometheus, Grafana) | High | All run locally in Docker Compose. |
-| AWS deployment | Medium | Designed and documented; Terraform only if an AWS account is actually used. |
+| AWS deployment | Medium | Terraform written and tested with mocked providers (Phase 10); applying it needs an AWS account. |
 | AI incident investigation | Medium | Works on synthetic telemetry. Must separate observed evidence from AI hypotheses. |
 
 **Main risks and mitigations**
@@ -134,7 +134,7 @@ Key decisions:
 | 7. Events | Event schemas, idempotency, retries, dead-letter handling | Kafka (where justified) |
 | 8. Observability | Traces, metrics, AI metrics (tokens, cost, latency), dashboards | OpenTelemetry, Prometheus, Grafana |
 | 9. Incident investigation | Evidence gathering, timeline, hypotheses, runbook retrieval, approval-gated remediation | builds on 4, 5, 8 |
-| 10. Enterprise UI + hardening | All 14 pages, load tests, security scans, AWS deployment design, interview pack | Locust, Trivy/pip-audit |
+| 10. Enterprise UI + hardening | **Part 1 done:** AWS Terraform, production stack with HTTPS, CI/CD with rollback, Kubernetes, security scans, threat model. **Part 2:** email verification, password reset, MFA/SSO, malware scanning, load tests, remaining pages, interview pack | Terraform/OpenTofu, Caddy, Kubernetes (Kustomize, kind), Checkov, Trivy, OWASP ZAP; later Locust |
 
 ---
 
@@ -205,8 +205,14 @@ On your machine:
 | Answer providers: offline extractive (default) and OpenAI-compatible LLM | ✅ Implemented (Phase 4). LLM tested against a mocked API only; answer quality with a real model not yet measured |
 | RAG benchmark (retrieval hit@k, cited-answer accuracy, refusals) | ✅ Implemented (Phase 4); results in `docs/ai-design.md` |
 | Streaming answers, cross-encoder reranking, query rewriting for follow-ups | ⏳ Possible improvements |
-| Email verification, password reset, SSO/MFA | ⏳ Not built yet (moved to Phase 10) |
-| Everything else | ⏳ Planned (Phases 7–10) |
+| AWS infrastructure as code (VPC, hardened EC2, KMS, Secrets Manager, least-privilege IAM, S3 backups, GitHub OIDC deploy role) | ✅ Implemented (Phase 10). Tested with mocked providers and Checkov; **not applied to a real AWS account** |
+| Production stack: Caddy HTTPS, HSTS, strict CSP, read-only non-root containers, internal data network | ✅ Implemented (Phase 10), run in CI |
+| Health-checked deploy with automatic rollback; nightly encrypted backups | ✅ Implemented (Phase 10). Rollback tested in CI; backups tested with a fake S3 only |
+| Kubernetes manifests (restricted Pod Security, network policies, migrate job, PDB, HPA) | ✅ Implemented (Phase 10), deployed to kind in CI |
+| Security scans: Trivy, OWASP ZAP baseline, Checkov, shellcheck | ✅ In CI (Phase 10) |
+| Threat model (STRIDE) | ✅ `docs/threat-model.md` (Phase 10) |
+| Email verification, password reset, SSO/MFA | ⏳ Not built yet (Phase 10, part 2) |
+| Everything else | ⏳ Planned (Phases 7–9, Phase 10 part 2) |
 
 ## 9. Feature verification matrix
 
@@ -226,6 +232,9 @@ Filled in only from real test runs and evidence. See `docs/testing.md`.
 | Observability | No | No | — |
 | Incident investigation | No | No | — |
 | Docker deployment | Yes | Yes (CI builds all images, checks health, and runs an upload → worker → chunks smoke test) | `.github/workflows/ci.yml` (docker job), `scripts/smoke_test.py` |
+| Production stack (HTTPS, headers, rollback) | Yes | Yes (CI: deploy.sh, smoke test over HTTPS, forced rollback, ZAP, Trivy; locally with Caddy + nginx) | `ci.yml` (production-stack job), `deploy/tests`, `docs/testing.md` |
+| AWS infrastructure (Terraform) | Yes | Partly (mocked providers + Checkov; never applied) | `infra/terraform/aws/tests`, `ci.yml` (infra job) |
+| Kubernetes | Yes | Yes (kind in CI: rollout, smoke test, network-policy enforcement, rollback) | `ci.yml` (kubernetes job), `deploy/k8s/tests` |
 | Document ingestion pipeline | Yes | Yes | `backend/tests/test_documents.py`, `test_parsing_and_chunking.py`, `test_embeddings.py` |
 | Worker reliability (retries, crash recovery, concurrency) | Yes | Yes | `backend/tests/test_ingestion_worker.py` |
 | Rate limiting | Yes | Yes (real Redis) | `backend/tests/test_rate_limit.py` |

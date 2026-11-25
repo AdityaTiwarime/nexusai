@@ -40,6 +40,7 @@ PROD = {
     "jwt_secret": "x" * 40,
     "cookie_secure": True,
     "encryption_key": "cHJvZC10ZXN0LWtleS1ub3QtdGhlLWRldi1vbmUtMTI=",
+    "database_url": "postgresql+asyncpg://nexus:a-generated-password@db:5432/nexusai",
 }
 
 
@@ -72,3 +73,10 @@ def test_integration_hosts_from_env(monkeypatch):
         "mock-services",
         "api.example.com",
     ]
+
+
+@pytest.mark.parametrize("password", ["nexus", ""])
+def test_production_refuses_the_default_database_password(password):
+    url = f"postgresql+asyncpg://nexus:{password}@db:5432/nexusai".replace(":@", "@")
+    with pytest.raises(ValueError, match="database password"):
+        make_settings(**{**PROD, "database_url": url})

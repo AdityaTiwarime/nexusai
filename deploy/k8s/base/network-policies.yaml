@@ -1,0 +1,96 @@
+# Zero trust inside the namespace: everything is denied, then each component gets
+# exactly the connections it needs.
+#
+#   ingress controller -> frontend:8080 -> backend:8000 -> PostgreSQL 5432, Redis 6379
+#   worker -> PostgreSQL, Redis;   backend/worker -> HTTPS (LLM, connected systems)
+#
+# The cloud metadata address is excluded from outbound HTTPS, so even a server-side
+# request forgery bug can't fetch node credentials.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: frontend
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8080 } # from the ingress controller (any namespace)
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: backend
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: backend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: frontend
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+# Outbound for everything that runs the backend image (API, worker, migration job).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-image-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [backend, worker, migrate]
+  policyTypes: [Egress]
+  egress:
+    # PostgreSQL and Redis: in the cluster (kind) or managed services (RDS, ElastiCache).
+    - ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 6379 }
+    # HTTPS to the internet, but never the instance metadata service.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [169.254.169.254/32]
+      ports:
+        - { protocol: TCP, port: 443 }

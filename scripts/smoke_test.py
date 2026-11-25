@@ -8,10 +8,14 @@ Finally an agent run creates a ticket and an email only after a second user
 Standard library only, so it runs on any machine with Python 3.
 
     python scripts/smoke_test.py [base_url]     # default http://localhost:5173
+
+Set SMOKE_INSECURE_TLS=1 to accept a self-signed certificate (the production stack
+with NEXUS_DOMAIN=localhost in CI uses Caddy's local certificate authority).
 """
 
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
@@ -22,6 +26,7 @@ BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:5173").rstrip("/
 # The mock services as seen by the backend container, and by this script.
 MOCK_FROM_BACKEND = os.environ.get("MOCK_URL_FROM_BACKEND", "http://mock-services:9000")
 MOCK_FROM_HERE = os.environ.get("MOCK_URL_FROM_HERE", "http://localhost:9000")
+TLS = ssl._create_unverified_context() if os.environ.get("SMOKE_INSECURE_TLS") == "1" else None
 
 
 def call(method: str, path: str, token: str | None = None, body=None, content_type=None):
@@ -35,7 +40,7 @@ def call(method: str, path: str, token: str | None = None, body=None, content_ty
         data, headers["Content-Type"] = body, content_type
     request = urllib.request.Request(BASE + path, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=10, context=TLS) as response:
             return response.status, json.loads(response.read() or b"null")
     except urllib.error.HTTPError as err:
         return err.code, json.loads(err.read() or b"null")
